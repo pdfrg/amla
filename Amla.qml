@@ -474,6 +474,23 @@ Item {
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
 
+    // Session-start pre-warm (plan step 10): keepLoaded mounts the plugin at
+    // shell start; ~10 s later refresh listings/facets and the empty-screen
+    // art so the first popup open skips all spawns and network waits.
+    Timer {
+        id: preWarmTimer
+
+        interval: 10000
+        running: true
+        repeat: false
+        onTriggered: {
+            root.refreshListings();
+            root.refreshFacets();
+            root.rebuildDisplay();
+            artSchedule.restart();
+        }
+    }
+
     Timer {
         id: mprisWatcher
 
