@@ -1,5 +1,7 @@
+import "Config.js" as Config
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
@@ -16,6 +18,8 @@ Item {
     property int selectedIndex: 0
     property var displayModel: []
     property string targetPlayer: "must"
+    property var mustConfig: Config.mustConfig("", Quickshell.env("HOME") || "")
+    readonly property string home: Quickshell.env("HOME") || ""
     readonly property int cardWidth: 680
     readonly property real rowHeight: Style.space(44)
     readonly property int maxRows: 14
@@ -56,16 +60,25 @@ Item {
         "title": "1997",
         "subtitle": "year"
     }]
+    readonly property string buildId: "0.3.0-config"
 
     function open(_payloadJson) {
         root.cardTop = -1;
         root.filterText = "";
         root.opened = true;
         root.selectedIndex = 0;
-        console.warn("[amla] opened, rows=" + root.displayModel.length);
-        Qt.callLater(function() {
-            console.warn("[amla] card=" + card.width + "x" + card.height + " content=" + content.implicitHeight + " pad=" + card.padding + " list=" + resultList.height + " filterRow=" + content.children[1].height + " hint=" + content.children[4].height + " vis=" + content.children[4].visible);
-        });
+    }
+
+    // IPC freshness probe: omarchy-shell shell call mds.amla buildInfo ""
+    function buildInfo() {
+        return root.buildId;
+    }
+
+    function toggleTargetPlayer() {
+        root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
+        pluginConfigFile.setText(Config.serializePluginConfig({
+            "targetPlayer": root.targetPlayer
+        }));
     }
 
     function close() {
@@ -121,6 +134,32 @@ Item {
     }
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
+
+    // amla's XDG dirs (config/state/cache) must exist before first write.
+    Process {
+        id: dirSetup
+
+        command: ["sh", "-c", "mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art"]
+        running: true
+    }
+
+    FileView {
+        id: mustConfigFile
+
+        path: root.home + "/.config/must/config.toml"
+        watchChanges: true
+        printErrors: false
+        onLoaded: root.mustConfig = Config.mustConfig(text, root.home)
+    }
+
+    FileView {
+        id: pluginConfigFile
+
+        path: root.home + "/.config/amla/config.json"
+        watchChanges: true
+        printErrors: false
+        onLoaded: root.targetPlayer = Config.parsePluginConfig(text).targetPlayer
+    }
 
     PanelWindow {
         id: panel
@@ -203,6 +242,9 @@ Item {
                             event.accepted = true;
                         } else if (event.key === Qt.Key_End && root.displayModel.length > 0) {
                             root.selectedIndex = root.displayModel.length - 1;
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_T && (event.modifiers & Qt.ControlModifier)) {
+                            root.toggleTargetPlayer();
                             event.accepted = true;
                         } else if ((event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) && root.filterText.length > 0) {
                             root.filterText = root.filterText.slice(0, -1);
