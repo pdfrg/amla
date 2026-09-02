@@ -32,7 +32,7 @@ function localSearchSql(q) {
     return ""
   var join = "FROM tracks_fts f JOIN tracks t ON t.id = f.rowid WHERE tracks_fts MATCH '" + m.replace(/'/g, "''") + "'"
   return "SELECT * FROM (" +
-    "SELECT 'artist' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, '' AS a2, '' AS a3, '' AS a4, 0 AS a5, COUNT(DISTINCT t.album) AS a6" +
+    "SELECT 'artist' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, '' AS a2, '' AS a3, MIN(t.path) AS a4, 0 AS a5, COUNT(DISTINCT t.album) AS a6" +
     " " + join + " GROUP BY a1 ORDER BY a1 LIMIT 12" +
     ") UNION ALL SELECT * FROM (" +
     "SELECT 'album' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, t.album AS a2, '' AS a3, MIN(t.path) AS a4, MAX(t.year) AS a5, COUNT(*) AS a6" +
@@ -301,4 +301,76 @@ function mergeRanked(scoredRows, cap) {
   for (var i = 0; i < rows.length && out.length < cap; i++)
     out.push(rows[i].row)
   return out
+}
+
+// ----- artwork (plan step 6) -----
+
+function shq(p) {
+    return "'" + String(p).replace(/'/g, "'\\''") + "'"
+}
+
+// One batched script per result batch: local dir probes (candidate cover
+// files) + subsonic cache downloads. Output lines: A<dir>|<file>.
+function artProbeCommand(jobs) {
+    var lines = []
+    for (var i = 0; i < jobs.length; i++) {
+        var job = jobs[i]
+        var out = job.out
+        if (job.url) {
+            lines.push("if [ -f " + shq(out) + " ]; then echo A" + shq(job.dir + "|" + out) +
+                "; else rm -f " + shq(out) + "; curl -fs --max-time 10 -o " + shq(out) + " " + shq(job.url) +
+                " && echo A" + shq(job.dir + "|" + out) + "; fi")
+        } else {
+            var candidates = ["folder.jpg", "cover.jpg", "album.jpg", "front.jpg", "front.png", "artist.jpg", "artist.png"]
+            for (var c = 0; c < candidates.length; c++) {
+                var f = job.dir + "/" + candidates[c]
+                lines.push("[ -f " + shq(f) + " ] && echo A" + shq(job.dir + "|" + f))
+            }
+        }
+    }
+    return lines.join("; ")
+}
+
+function parseArtOutput(outText) {
+    var map = {}
+    var lines = String(outText || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i]
+        if (line.charAt(0) !== "A")
+            continue
+        var rest = line.substring(1)
+        var bar = rest.indexOf("|")
+        if (bar < 0)
+            continue
+        map[rest.substring(0, bar)] = rest.substring(bar + 1)
+    }
+    return map
+}
+
+// Directory whose artwork represents a row.
+function artDirFor(row) {
+    if (!row)
+        return ""
+    switch (row.kind) {
+    case "album":
+        return row.albumPath || ""
+    case "song":
+    case "subsonic-song":
+        return row.path ? parentDir(row.path) : (row.albumPath || "")
+    case "temp":
+        return row.path || ""
+    case "artist":
+        return row.path ? parentDir(row.path) : ""
+    default:
+        return ""
+    }
+}
+
+// Disk-cache path for a subsonic coverArt id (~10-30 KB per file, size=96).
+function subArtCacheFile(coverArtId, cacheDir) {
+    var id = String(coverArtId || "")
+    if (id.length === 0)
+        return ""
+    var safe = id.replace(/[^A-Za-z0-9_-]/g, "_")
+    return cacheDir + "/" + safe + "-96.jpg"
 }

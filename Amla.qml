@@ -76,6 +76,9 @@ Item {
     property bool searchDirty: false
     readonly property string mustDb: home + "/.cache/must/library.db"
     readonly property string playlistDir: home + "/.cache/must/playlists"
+    readonly property string artCacheDir: home + "/.cache/amla/art"
+    property var artMap: ({
+    })
     readonly property string buildId: "0.4.0-catalog"
 
     function open(_payloadJson) {
@@ -171,6 +174,48 @@ Item {
 
         }
         root.displayModel = Catalog.mergeRanked(scoredRows(rows, q), 60);
+        artSchedule.restart();
+    }
+
+    // ----- artwork (plan step 6) -----
+    function artFor(row) {
+        var key = row.kind.indexOf("subsonic-") === 0 ? Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir) : Catalog.artDirFor(row);
+        var f = artMap[key];
+        return f || "";
+    }
+
+    function artJobs() {
+        var seen = {
+        };
+        var jobs = [];
+        for (var i = 0; i < root.displayModel.length; i++) {
+            var row = root.displayModel[i];
+            var job = null;
+            if (row.kind.indexOf("subsonic-") === 0) {
+                var cache = Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir);
+                if (cache.length > 0 && root.subEnabled) {
+                    var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    job = {
+                        "dir": Catalog.artDirFor(row) || cache,
+                        "out": cache,
+                        "url": Subsonic.coverArtUrl(root.sub.url, auth, row.coverArt || row.id, 96)
+                    };
+                }
+            } else {
+                var dir = Catalog.artDirFor(row);
+                if (dir.length > 0)
+                    job = {
+                    "dir": dir,
+                    "out": ""
+                };
+
+            }
+            if (job && !seen[job.dir + "|" + job.out]) {
+                seen[job.dir + "|" + job.out] = true;
+                jobs.push(job);
+            }
+        }
+        return jobs;
     }
 
     function requestSearch() {
@@ -189,6 +234,12 @@ Item {
         searchProc.query = q;
         searchProc.command = ["sqlite3", "-json", root.mustDb, sql];
         searchProc.running = true;
+        if (root.subEnabled) {
+            subSearchProc.query = q;
+            subSearchProc.auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            subSearchProc.command = ["curl", "-s", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
+            subSearchProc.running = true;
+        }
     }
 
     function refreshListings() {
@@ -323,6 +374,38 @@ Item {
                 root.subGenres = Subsonic.genreFacets(g);
                 root.subYears = Subsonic.yearFacets(y);
                 root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    Timer {
+        id: artSchedule
+
+        interval: 60
+        onTriggered: {
+            var jobs = root.artJobs();
+            if (jobs.length === 0 || artProc.running)
+                return ;
+
+            artProc.command = ["sh", "-c", Catalog.artProbeCommand(jobs)];
+            artProc.running = true;
+        }
+    }
+
+    Process {
+        id: artProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                console.log("[artdbg] art out: " + String(text || "").slice(0, 200));
+                var found = Catalog.parseArtOutput(String(text || ""));
+                var merged = {
+                };
+                for (var k in root.artMap) merged[k] = root.artMap[k]
+                for (var k2 in found) merged[k2] = found[k2]
+                root.artMap = merged;
             }
         }
 
@@ -572,7 +655,7 @@ Item {
                             anchors.rightMargin: Style.space(8)
                             spacing: Style.space(10)
 
-                            // Thumbnail slot (art lands in the thumbnails step).
+                            // Thumbnail: album art from disk probe / subsonic cache.
                             Rectangle {
                                 id: thumbBox
 
@@ -581,6 +664,17 @@ Item {
                                 radius: Style.cornerRadius
                                 color: Style.normalFillFor(Color.menu.text, Color.menu.selectedText)
                                 anchors.verticalCenter: parent.verticalCenter
+                                clip: true
+
+                                Image {
+                                    anchors.fill: parent
+                                    asynchronous: true
+                                    sourceSize.width: 80
+                                    sourceSize.height: 80
+                                    fillMode: Image.PreserveAspectCrop
+                                    visible: root.artFor(modelData) !== ""
+                                    source: root.artFor(modelData) === "" ? "" : "file://" + root.artFor(modelData)
+                                }
 
                                 Text {
                                     anchors.centerIn: parent
@@ -588,6 +682,7 @@ Item {
                                     color: Color.muted
                                     font.family: Style.font.menuFamily
                                     font.pixelSize: Style.font.icon
+                                    visible: root.artFor(modelData) === ""
                                 }
 
                             }
