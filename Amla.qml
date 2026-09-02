@@ -349,9 +349,22 @@ Item {
             subRandomProc.running = true;
             return ;
         }
-        if (target === "cliamp" && row && row.kind.indexOf("subsonic-") === 0 && action !== "random-album") {
-            dispatchSubsonicCliamp(row, action);
-            return ;
+        if (target === "cliamp" && row && row.kind.indexOf("subsonic-") === 0) {
+            if (row.kind === "subsonic-album" && action !== "play") {
+                // provider-album queue unsupported — expand via getAlbum.
+                dispatchSubsonicCliamp(row, action);
+                return ;
+            }
+            var uri = subsonicCliampUri(row, action);
+            if (uri.length > 0) {
+                dispatchProc.script = Dispatch.build(action, row, target, {
+                    "uri": uri
+                });
+                dispatchProc.hist = historyFor(row);
+                dispatchProc.command = ["sh", "-c", dispatchProc.script];
+                dispatchProc.running = true;
+                return ;
+            }
         }
         if (target === "cliamp" && row) {
             if (row.kind === "song" || row.kind === "playlist") {
@@ -371,35 +384,29 @@ Item {
         dispatchProc.running = true;
     }
 
-    // cliamp + subsonic rows: fetch tracks, write an m3u of stream URLs, load it.
+    // cliamp URI per subsonic row (play; queue for enqueues).
+    function subsonicCliampUri(row, action) {
+        var verb = action === "play" ? "play" : "queue";
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        if (row.kind === "subsonic-song")
+            return "cliamp://" + verb + "?url=" + encodeURIComponent(Subsonic.streamUrl(root.sub.url, auth, row.id));
+
+        if (row.kind === "subsonic-album")
+            return "cliamp://play?provider=navidrome&album=" + encodeURIComponent(row.id);
+
+        if (row.kind === "subsonic-artist")
+            return "cliamp://" + verb + "?provider=navidrome&q=" + encodeURIComponent(row.title);
+
+        return "";
+    }
+
+    // cliamp + subsonic album enqueue: getAlbum → per-track stream URIs.
     function dispatchSubsonicCliamp(row, action) {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         pendingSubAction = action;
         pendingSubRow = row;
-        if (row.kind === "subsonic-song") {
-            writeSubsonicM3u([{
-                "id": row.id,
-                "artist": row.artist,
-                "title": row.titleField || row.title,
-                "duration": row.duration || 0
-            }]);
-            return ;
-        }
         subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
         subAlbumProc.running = true;
-    }
-
-    function writeSubsonicM3u(tracks) {
-        var lines = ["#EXTM3U"];
-        for (var i = 0; i < tracks.length; i++) {
-            var t = tracks[i];
-            lines.push("#EXTINF:" + (t.duration || -1) + "," + (t.artist || "") + " - " + (t.title || ""));
-            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            lines.push(Subsonic.streamUrl(root.sub.url, auth, t.id));
-        }
-        m3uFile.path = root.runtimeDir + "/amla/sub-" + Date.now() + ".m3u";
-        pendingM3uText = lines.join("\n") + "\n";
-        m3uFile.setText(pendingM3uText);
     }
 
     function refreshListings() {
@@ -613,38 +620,6 @@ Item {
 
     }
 
-    FileView {
-        id: m3uFile
-
-        watchChanges: false
-        printErrors: false
-    }
-
-    Timer {
-        id: m3uDispatchTimer
-
-        interval: 200
-        onTriggered: {
-            dispatchProc.script = Dispatch.build(root.pendingSubAction, root.pendingSubRow, "cliamp", {
-                "m3uPath": m3uFile.path,
-                "mustBin": root.pluginMustBin
-            });
-            dispatchProc.command = ["sh", "-c", dispatchProc.script];
-            dispatchProc.running = true;
-        }
-    }
-
-    Connections {
-        function onTextChanged() {
-            if (root.pendingM3uText.length > 0 && m3uFile.text() === root.pendingM3uText) {
-                root.pendingM3uText = "";
-                m3uDispatchTimer.restart();
-            }
-        }
-
-        target: m3uFile
-    }
-
     Process {
         id: subRandomProc
 
@@ -656,14 +631,22 @@ Item {
                 if (!alb)
                     return ;
 
-                root.pendingSubRow = {
+                var pseudoRow = {
                     "kind": "subsonic-album",
                     "id": alb.id || "",
                     "album": alb.name || "",
                     "artist": alb.artist || "",
                     "title": alb.name || ""
                 };
-                root.dispatchSubsonicCliamp(root.pendingSubRow, "play");
+                var uri = root.subsonicCliampUri(pseudoRow, "play");
+                if (uri.length > 0) {
+                    root.dispatchProc.script = Dispatch.build("play", pseudoRow, "cliamp", {
+                        "uri": uri
+                    });
+                    root.dispatchProc.hist = null;
+                    root.dispatchProc.command = ["sh", "-c", root.dispatchProc.script];
+                    root.dispatchProc.running = true;
+                }
             }
         }
 
@@ -677,7 +660,21 @@ Item {
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
                 var tracks = (sub && sub.album && sub.album.song) || [];
-                root.writeSubsonicM3u(tracks);
+                if (tracks.length === 0)
+                    return ;
+
+                var uris = [];
+                for (var i = 0; i < tracks.length; i++) {
+                    var t = tracks[i];
+                    var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    uris.push("cliamp://queue?url=" + encodeURIComponent(Subsonic.streamUrl(root.sub.url, auth, t.id)));
+                }
+                root.dispatchProc.script = Dispatch.build(root.pendingSubAction || "enqueue", root.pendingSubRow, "cliamp", {
+                    "uriLines": uris
+                });
+                root.dispatchProc.hist = historyFor(root.pendingSubRow);
+                root.dispatchProc.command = ["sh", "-c", root.dispatchProc.script];
+                root.dispatchProc.running = true;
             }
         }
 

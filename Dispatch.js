@@ -116,46 +116,60 @@ function build(action, row, target, ctx) {
             "\n  " + launchVerb("") + "\n  exit 1\nfi"
     }
     // ----- cliamp target -----
+    // Empirically pinned on v1.63.2: `queue <file>` appends local files
+    // (silent on success); `load <name>` only takes saved playlist names;
+    // `cliamp open 'cliamp://play?provider=navidrome&album=<id>'` plays
+    // provider content natively; local play = playlist create + load + play.
+    var RUNNING = cliampRunningExpr()
+    var LAUNCH = "omarchy-launch-tui cliamp"
+
     if (action === "random-album") {
-        if (ctx.subsonicRandomM3u) {
-            return "if " + cliampRunningExpr() + "; then\n  cliamp load " + shq(ctx.subsonicRandomM3u) + "\nelse\n  " +
-                notify("cliamp not running — launch it first for subsonic random") + "\n  exit 1\nfi"
-        }
-        var findCmd = "find \"$RD\" -maxdepth 1 -type f \\( -name '*.mp3' -o -name '*.flac' -o -name '*.ogg' -o -name '*.m4a' -o -name '*.wav' -o -name '*.opus' \\) -print0 | sort -z | xargs -0 -r -n1 cliamp queue"
-        if (ctx.randomDir) {
-            return "RD=" + shq(ctx.randomDir) + "\nif " + cliampRunningExpr() + "; then\n  " + findCmd + "\nelse\n  " +
-                notify("cliamp not running — launch it first for random album") + "\n  exit 1\nfi"
-        }
-        // Random local album dir straight out of must's library DB.
+        // Random local album dir straight out of must's library DB, played
+        // through the playlist route (or launch args when not running).
         return "DB=\"$HOME/.cache/must/library.db\"\nRD=$(sqlite3 -readonly \"$DB\" \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\" 2>/dev/null)\nRD=$(dirname \"$RD\" 2>/dev/null)\nif [ -z \"$RD\" ] || [ ! -d \"$RD\" ]; then\n  " +
-            notify("no local albums found for random") + "\n  exit 1\nfi\nif " + cliampRunningExpr() + "; then\n  " + findCmd + "\nelse\n  " +
-            notify("cliamp not running — launch it first for random album") + "\n  exit 1\nfi"
+            notify("no local albums found for random") + "\n  exit 1\nfi\nif " + RUNNING + "; then\n  cliamp playlist delete amla-play >/dev/null 2>&1\n  cliamp playlist create amla-play \"$RD\" >/dev/null && cliamp load amla-play >/dev/null && cliamp play >/dev/null\nelse\n  " + LAUNCH + " \"$RD\" --auto-play >/dev/null 2>&1 &\nfi"
     }
 
+    // Local rows: QML passes files=[...] for songs/playlists, expandDir for
+    // albums/temp. Subsonic rows arrive as cliamp URIs instead.
     var files = ctx.files || []
-    if (files.length === 0 && ctx.expandDir) {
-        return "if " + cliampRunningExpr() + "; then\n  find " + shq(ctx.expandDir) + " -maxdepth 1 -type f \\( -name '*.mp3' -o -name '*.flac' -o -name '*.ogg' -o -name '*.m4a' -o -name '*.wav' -o -name '*.opus' \\) -print0 | sort -z | xargs -0 -r -n1 cliamp queue\nelse\n  " +
-            notify("cliamp not running — launch it first") + "\n  exit 1\nfi"
-    }
+    if (files.length === 0 && ctx.expandDir)
+        files = ["__DIR__" + ctx.expandDir]
+
     if (files.length === 1) {
-        var one = "cliamp queue " + shq(files[0])
+        var f = files[0]
+        var isDir = f.indexOf("__DIR__") === 0
+        var target = isDir ? f.slice(7) : f
         if (action === "play") {
-            return "if " + cliampRunningExpr() + "; then\n  " + one + "\nelse\n  " +
-                notify("cliamp not running — starting it") + "\n  omarchy-launch-tui cliamp >/dev/null 2>&1 &\n  sleep 1\n  " + one + " || true\nfi"
+            var playRoute = "cliamp playlist delete amla-play >/dev/null 2>&1\n  cliamp playlist create amla-play " + shq(target) + " >/dev/null && cliamp load amla-play >/dev/null && cliamp play >/dev/null"
+            var playLaunch = isDir ? LAUNCH + " " + shq(target) + " --auto-play >/dev/null 2>&1 &" : LAUNCH + " " + shq(target) + " --auto-play >/dev/null 2>&1 &"
+            return "if " + RUNNING + "; then\n  " + playRoute + "\nelse\n  " + playLaunch + "\nfi"
         }
-        return "if " + cliampRunningExpr() + "; then\n  " + one + "\nelse\n  " +
-            notify("cliamp not running — enqueue needs a running player") + "\n  exit 1\nfi"
+        // enqueue / enqueue-next: queue appends (no insert-next in cliamp CLI).
+        return "if " + RUNNING + "; then\n  cliamp queue " + shq(target) + "\nelse\n  " +
+            notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1\nfi"
     }
-    if (files.length > 0) {
+    if (files.length > 1) {
         var body = ""
         for (var i = 0; i < files.length; i++)
             body += "cliamp queue " + shq(files[i]) + "\n"
-        return "if " + cliampRunningExpr() + "; then\n" + body + "else\n  " +
+        return "if " + RUNNING + "; then\n" + body + "else\n  " +
             notify("cliamp not running — enqueue needs a running player") + "\n  exit 1\nfi"
     }
-    if (ctx.m3uPath) {
-        return "if " + cliampRunningExpr() + "; then\n  cliamp load " + shq(ctx.m3uPath) + "\nelse\n  " +
-            notify("cliamp not running — launch it first") + "\n  exit 1\nfi"
+    if (ctx.uri) {
+        var openCmd = "cliamp open " + shq(ctx.uri)
+        if (action === "play") {
+            return "if " + RUNNING + "; then\n  " + openCmd + "\nelse\n  " + LAUNCH + " open " + shq(ctx.uri) + " >/dev/null 2>&1 &\nfi"
+        }
+        return "if " + RUNNING + "; then\n  " + openCmd + "\nelse\n  " +
+            notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1\nfi"
+    }
+    if (ctx.uriLines && ctx.uriLines.length > 0) {
+        var ub = ""
+        for (var j = 0; j < ctx.uriLines.length; j++)
+            ub += "cliamp open " + shq(ctx.uriLines[j]) + "\n"
+        return "if " + RUNNING + "; then\n" + ub + "else\n  " +
+            notify("cliamp not running — enqueue needs a running player") + "\n  exit 1\nfi"
     }
     return "exit 1"
 }
