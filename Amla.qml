@@ -5,6 +5,7 @@ import "Md5.js" as Md5
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Mpris
 import Quickshell.Wayland
 import "Subsonic.js" as Subsonic
 import qs.Commons
@@ -51,6 +52,24 @@ Item {
     property string subSearchedQuery: ""
     property var subGenres: []
     property var subYears: []
+    // ----- play history (MPRIS watcher + dispatch recording) -----
+    property string lastRecordedKey: ""
+    property double lastRecordedMs: 0
+    readonly property var mprisPlayers: Mpris.players ? Mpris.players.values : []
+    readonly property var mprisActive: {
+        var best = null;
+        var list = mprisPlayers;
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            if (!p || p.playbackState !== Mpris.PlaybackState.Playing)
+                continue;
+
+            if (best === null)
+                best = p;
+
+        }
+        return best;
+    }
     readonly property var sub: mustConfig.subsonic
     readonly property bool subEnabled: sub.enabled && sub.url.length > 0 && sub.password.length > 0
     property int searchSerial: 0
@@ -193,9 +212,40 @@ Item {
         return "ok";
     }
 
+    function recordMprisPlay() {
+        var p = root.mprisActive;
+        if (!p)
+            return ;
+
+        var title = String(p.trackTitle || "").trim();
+        var artist = String(p.trackArtist || "").trim();
+        var album = String(p.trackAlbum || "").trim();
+        if (title.length === 0 || artist.length === 0)
+            return ;
+
+        var key = History.keyFor("song", artist, album, title);
+        var now = Date.now();
+        if (key === root.lastRecordedKey && now - root.lastRecordedMs < 15000)
+            return ;
+
+        root.lastRecordedKey = key;
+        root.lastRecordedMs = now;
+        History.recordPlay("song", artist, album, title, title, "");
+        historyFile.setText(History.serialize());
+    }
+
     onFilterTextChanged: searchDebounce.restart()
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
+
+    Timer {
+        id: mprisWatcher
+
+        interval: 3000
+        running: true
+        repeat: true
+        onTriggered: root.recordMprisPlay()
+    }
 
     Timer {
         id: searchDebounce
@@ -314,6 +364,18 @@ Item {
         onLoaded: {
             root.mustConfig = Config.mustConfig(text(), root.home);
             refreshListings();
+        }
+    }
+
+    FileView {
+        id: historyFile
+
+        path: root.home + "/.local/state/amla/history.json"
+        watchChanges: false
+        printErrors: false
+        onLoaded: {
+            History.load(text());
+            rebuildDisplay();
         }
     }
 
