@@ -14,15 +14,22 @@ function shq(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
+// Shared must-binary-not-found notification fragment (module scope: used by
+// mustBinScript's generated scripts).
+var NOTIFY_BIN = "notify-send -a amla 'amla' 'must binary not found — install it (e.g. to ~/.local/bin) or set mustBin in ~/.config/amla/config.json' >/dev/null 2>&1 &"
+
 function mustBinScript(configOverride) {
+    // Published plugin: no dev-machine paths in code. Resolution order:
+    // config override, then PATH. Empty → the script notifies and fails.
     if (configOverride && String(configOverride).length > 0)
-        return String(configOverride)
-    return "BIN=$(command -v must || true); [ -z \"$BIN\" ] && BIN=\"$HOME/Work/must/must\"; true"
+        return "BIN=" + shq(String(configOverride)) + "\n[ -x \"$BIN\" ] || BIN=$(command -v must 2>/dev/null || true)\nif [ -z \"$BIN\" ]; then\n  " + NOTIFY_BIN + "\n  exit 1\nfi"
+    return "BIN=$(command -v must 2>/dev/null || true)\nif [ -z \"$BIN\" ]; then\n  " + NOTIFY_BIN + "\n  exit 1\nfi"
 }
 
-// must ctl socket per DOCUMENTATION.md: $XDG_RUNTIME_DIR/must/ctl.sock
+// Liveness probe, not socket existence — must leaves a stale ctl.sock behind
+// after a crash, and dialing it just fails.
 function mustRunningExpr() {
-    return "[ -S \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/must/ctl.sock\" ]"
+    return "\"$BIN\" status >/dev/null 2>&1"
 }
 
 function cliampRunningExpr() {
@@ -30,7 +37,7 @@ function cliampRunningExpr() {
 }
 
 // Resolver argument for must, per row kind.
-function mustResolver(row, configOverride) {
+function mustResolver(row) {
     if (!row)
         return ""
     switch (row.kind) {
@@ -70,26 +77,44 @@ function build(action, row, target, ctx) {
     var bin = mustBinScript(ctx.mustBin)
 
     if (target === "must") {
+        // not running → launch the verb inside a fresh terminal: auto-start
+        // needs a TTY (from the plugin's headless Process it fails with
+        // "bubbletea: error opening TTY"), and omarchy-launch-tui is a
+        // passthrough, so pass the resolved binary path.
+        var launchVerb = function (args) {
+            return "omarchy-launch-tui \"$BIN\" " + args + " >/dev/null 2>&1 &"
+        }
         if (action === "random-album") {
-            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" random\nelse\n  " +
-                notify("must not running — launch it first for random album") + "\n  exit 1\nfi"
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" random\nelse\n  " + launchVerb("random") + "\nfi"
         }
         if (action === "playshuffle") {
             var psq = row && row.kind !== "action" && row.title ? row.title : (ctx.query || "")
-            return bin + "\n\"$BIN\" playshuffle " + shq(psq)
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" playshuffle " + shq(psq) +
+                "\nelse\n  " + launchVerb("playshuffle " + shq(psq)) + "\nfi"
         }
-        var res = mustResolver(row, ctx.mustBin)
+        var res = mustResolver(row)
         if (res.length === 0)
             return "exit 1"
-        var verb = action === "play" ? "play" : (action === "enqueue" ? "enqueue" : "enqueue-next")
-        var head = bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + verb + " " + res + "\nelse\n"
-        if (action === "play")
-            // must play auto-starts the TUI with the resolver (DOCUMENTATION.md).
-            return head + "  \"$BIN\" play " + res + "\nfi"
-        return head + "  " + notify("must not running — enqueue needs a running player") +
-            "\n  omarchy-launch-tui must >/dev/null 2>&1 &\n  exit 1\nfi"
+        if (action === "play") {
+            // not running: ctl `play <path>` auto-starts via resolvePlayQuery,
+            // which has NO file-path tier — a path playQuery resolves to nothing
+            // (silent empty playlist). Files/dirs instead go as launch args
+            // (loadCLIPaths + --play); prefixed resolvers keep the ctl verb.
+            var launchArgs
+            if ((row.kind === "song" || row.kind === "temp") && row.path)
+                launchArgs = shq(row.path) + " --play"
+            else if (row.kind === "playlist")
+                launchArgs = "play " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, "")) + " --play"
+            else
+                launchArgs = "play " + res + " --play"
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" play " + res + "\nelse\n  " +
+                launchVerb(launchArgs) + "\nfi"
+        }
+        var verb = action === "enqueue" ? "enqueue" : "enqueue-next"
+        return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + verb + " " + res + "\nelse\n  " +
+            notify("must not running — started it; try again once it's up") +
+            "\n  " + launchVerb("") + "\n  exit 1\nfi"
     }
-
     // ----- cliamp target -----
     if (action === "random-album") {
         if (ctx.subsonicRandomM3u) {
