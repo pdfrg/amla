@@ -1,4 +1,6 @@
+import "Catalog.js" as Catalog
 import "Config.js" as Config
+import "History.js" as History
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -34,39 +36,28 @@ Item {
     property int cardTop: -1
     readonly property int centeredTop: Math.max(Style.gapsOut, Math.round((panel.height - card.height) / 2))
     readonly property int effectiveCardTop: cardTop >= 0 ? cardTop : centeredTop
-    property var mockRows: [{
-        "kind": "artist",
-        "badge": "",
-        "title": "Radiohead",
-        "subtitle": "artist"
-    }, {
-        "kind": "album",
-        "badge": "",
-        "title": "OK Computer",
-        "subtitle": "Radiohead · 1997"
-    }, {
-        "kind": "song",
-        "badge": "",
-        "title": "Karma Police",
-        "subtitle": "OK Computer · Radiohead"
-    }, {
-        "kind": "genre",
-        "badge": "",
-        "title": "Alt Rock",
-        "subtitle": "genre"
-    }, {
-        "kind": "year",
-        "badge": "",
-        "title": "1997",
-        "subtitle": "year"
-    }]
-    readonly property string buildId: "0.3.0-config"
+    // ----- catalog state (see Catalog.js) -----
+    property var facetGenres: []
+    property var facetYears: []
+    property var listing: ({
+        "temp": [],
+        "playlists": []
+    })
+    property var searchRows: []
+    property string searchedQuery: ""
+    property int searchSerial: 0
+    property bool searchDirty: false
+    readonly property string mustDb: home + "/.cache/must/library.db"
+    readonly property string playlistDir: home + "/.cache/must/playlists"
+    readonly property string buildId: "0.4.0-catalog"
 
     function open(_payloadJson) {
         root.cardTop = -1;
         root.filterText = "";
         root.opened = true;
         root.selectedIndex = 0;
+        refreshListings();
+        refreshFacets();
     }
 
     // IPC freshness probe: omarchy-shell shell call mds.amla buildInfo ""
@@ -93,10 +84,6 @@ Item {
         return "ok";
     }
 
-    function refresh() {
-        return "ok";
-    }
-
     function select(delta) {
         if (root.displayModel.length === 0)
             return ;
@@ -105,35 +92,151 @@ Item {
         root.selectedIndex = Math.max(0, Math.min(root.displayModel.length - 1, next));
     }
 
-    // Placeholder until the data layer lands; produces rows from the mock model.
-    function rebuildDisplay() {
-        var q = root.filterText.toLowerCase();
-        var out = [];
-        for (var i = 0; i < root.mockRows.length; i++) {
-            if (q === "" || root.mockRows[i].title.toLowerCase().indexOf(q) >= 0)
-                out.push(root.mockRows[i]);
-
-        }
-        root.displayModel = out;
-    }
-
+    // ----- result building -----
     function freezeCardTop() {
         if (panel.visible && cardTop < 0 && root.filterText.length > 0)
             cardTop = effectiveCardTop;
 
     }
 
-    function activate(index) {
-        // Placeholder until Dispatch.js lands.
-        return null;
+    // ----- result building -----
+    function scoredRows(rows, query) {
+        var out = [];
+        var favs = History.favoriteIndex();
+        for (var i = 0; i < rows.length; i++) {
+            var key = History.rowKey(rows[i]);
+            var score = 0;
+            if (favs[key] !== undefined)
+                score = History.scoreOf(favs[key]) * 1000;
+
+            out.push({
+                "row": rows[i],
+                "favScore": score,
+                "order": i
+            });
+        }
+        return out;
     }
 
-    onFilterTextChanged: {
-        root.rebuildDisplay();
-        root.freezeCardTop();
+    function rebuildDisplay() {
+        var q = root.filterText;
+        var rows = [];
+        if (q.length === 0) {
+            rows = History.emptyStateRows(root.mustConfig, root.listing);
+        } else {
+            rows = Catalog.facetRows(root.facetGenres, root.facetYears, q);
+            var cached = Catalog.localRows([], root.listing, q);
+            rows = rows.concat(cached);
+            if (root.searchedQuery === q) {
+                var locals = Catalog.localRows(root.searchRows, root.listing, q);
+                rows = locals.concat(rows);
+            }
+        }
+        root.displayModel = Catalog.mergeRanked(scoredRows(rows, q), 60);
     }
+
+    function requestSearch() {
+        var q = root.filterText;
+        var sql = Catalog.localSearchSql(q);
+        if (sql.length === 0) {
+            root.searchRows = [];
+            root.searchedQuery = "";
+            rebuildDisplay();
+            return ;
+        }
+        if (searchProc.running) {
+            root.searchDirty = true;
+            return ;
+        }
+        searchProc.query = q;
+        searchProc.command = ["sqlite3", "-json", root.mustDb, sql];
+        searchProc.running = true;
+    }
+
+    function refreshListings() {
+        listingProc.command = ["sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
+        listingProc.running = true;
+    }
+
+    function refreshFacets() {
+        facetProc.command = ["sqlite3", "-json", root.mustDb, Catalog.facetSql()];
+        facetProc.running = true;
+    }
+
+    function refresh() {
+        refreshListings();
+        refreshFacets();
+        return "ok";
+    }
+
+    onFilterTextChanged: searchDebounce.restart()
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
+
+    Timer {
+        id: searchDebounce
+
+        interval: 120
+        onTriggered: {
+            root.requestSearch();
+            root.rebuildDisplay();
+        }
+    }
+
+    Process {
+        id: searchProc
+
+        property string query: ""
+
+        onExited: {
+            if (root.searchDirty) {
+                root.searchDirty = false;
+                root.requestSearch();
+            }
+        }
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                root.searchRows = Catalog.parseSqliteJson(text);
+                root.searchedQuery = searchProc.query;
+                root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    Process {
+        id: listingProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                root.listing = Catalog.parseListing(text);
+                root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    Process {
+        id: facetProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var all = Catalog.parseSqliteJson(text);
+                root.facetGenres = all.filter(function(r) {
+                    return r.g !== undefined;
+                });
+                root.facetYears = all.filter(function(r) {
+                    return r.y !== undefined;
+                });
+                root.rebuildDisplay();
+            }
+        }
+
+    }
 
     // amla's XDG dirs (config/state/cache) must exist before first write.
     Process {
@@ -149,7 +252,10 @@ Item {
         path: root.home + "/.config/must/config.toml"
         watchChanges: true
         printErrors: false
-        onLoaded: root.mustConfig = Config.mustConfig(text, root.home)
+        onLoaded: {
+            root.mustConfig = Config.mustConfig(text(), root.home);
+            refreshListings();
+        }
     }
 
     FileView {
@@ -158,7 +264,7 @@ Item {
         path: root.home + "/.config/amla/config.json"
         watchChanges: true
         printErrors: false
-        onLoaded: root.targetPlayer = Config.parsePluginConfig(text).targetPlayer
+        onLoaded: root.targetPlayer = Config.parsePluginConfig(text()).targetPlayer
     }
 
     PanelWindow {

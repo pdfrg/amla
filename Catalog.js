@@ -1,0 +1,304 @@
+// Catalog queries over must's library.db (read-only) + temp albums + playlists.
+// Pure JS: SQL builders, output parsers, and merges live here; the QML side
+// runs them through one-shot Process calls (sqlite3 -json / sh).
+
+function escapeLike(q) {
+  return String(q).replace(/[\\%_]/g, function (c) { return "\\" + c })
+}
+
+// FTS5 MATCH expression from raw user input: each whitespace token becomes a
+// quoted prefix term. Quotes stripped; empty input → "" (caller skips SQL).
+function ftsQuery(q) {
+  var tokens = String(q).replace(/"/g, " ").split(/\s+/)
+  var out = []
+  for (var i = 0; i < tokens.length; i++) {
+    var t = tokens[i].trim()
+    if (t.length > 0)
+      out.push("\"" + t + "\"*")
+  }
+  return out.join(" ")
+}
+
+function likeCond(q) {
+  var e = escapeLike(q)
+  return "LIKE '%" + e + "%' ESCAPE '\\'"
+}
+
+// One batched statement: artists, albums, songs tiers via the same FTS match.
+// Column aliases a1..a6 keep the union shapes identical.
+function localSearchSql(q) {
+  var m = ftsQuery(q)
+  if (!m)
+    return ""
+  var join = "FROM tracks_fts f JOIN tracks t ON t.id = f.rowid WHERE tracks_fts MATCH '" + m.replace(/'/g, "''") + "'"
+  return "SELECT * FROM (" +
+    "SELECT 'artist' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, '' AS a2, '' AS a3, '' AS a4, 0 AS a5, COUNT(DISTINCT t.album) AS a6" +
+    " " + join + " GROUP BY a1 ORDER BY a1 LIMIT 12" +
+    ") UNION ALL SELECT * FROM (" +
+    "SELECT 'album' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, t.album AS a2, '' AS a3, MIN(t.path) AS a4, MAX(t.year) AS a5, COUNT(*) AS a6" +
+    " " + join + " GROUP BY a1, t.album ORDER BY a2 LIMIT 16" +
+    ") UNION ALL SELECT * FROM (" +
+    "SELECT 'song' AS tier, t.artist AS a1, t.album AS a2, t.title AS a3, t.path AS a4, t.year AS a5, CAST(t.duration AS INTEGER) AS a6" +
+    " " + join + " LIMIT 30" +
+    ");"
+}
+
+// Facets: full genre + year lists, fetched once per popup open.
+function facetSql() {
+  return "SELECT genre AS g, COUNT(*) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
+    "SELECT year AS y, COUNT(DISTINCT album) AS n FROM tracks WHERE year > 0 GROUP BY year ORDER BY year;"
+}
+
+// Temp albums + playlists in one shell pass. T<path> and P<path> lines.
+function listingCommand(tempDirs, playlistDir) {
+  var dirs = []
+  for (var i = 0; i < tempDirs.length; i++)
+    dirs.push(String(tempDirs[i]).replace(/'/g, "'\\''"))
+  var cmd = ""
+  for (var j = 0; j < dirs.length; j++) {
+    cmd += "find '" + dirs[j] + "' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sed 's/^/T/' | sort -f;"
+  }
+  if (playlistDir)
+    cmd += "ls -1 '" + String(playlistDir).replace(/'/g, "'\\''") + "'/*.m3u 2>/dev/null | sed 's/^/P/';"
+  return cmd
+}
+
+function basename(p) {
+  var s = String(p || "")
+  var idx = s.lastIndexOf("/")
+  return idx >= 0 ? s.substring(idx + 1) : s
+}
+
+function parentDir(p) {
+  var s = String(p || "")
+  var idx = s.lastIndexOf("/")
+  return idx > 0 ? s.substring(0, idx) : s
+}
+
+// sqlite3 -json emits one JSON array per statement, back to back.
+function parseSqliteJson(out) {
+  var text = String(out || "").trim()
+  if (!text)
+    return []
+  var results = []
+  var decoder = new JsonDecoder(text)
+  while (true) {
+    var arr = decoder.nextArray()
+    if (arr === null)
+      break
+    for (var i = 0; i < arr.length; i++)
+      results.push(arr[i])
+  }
+  return results
+}
+
+// Tolerant sequential reader for concatenated JSON arrays.
+function JsonDecoder(text) {
+  this.text = text
+  this.pos = 0
+}
+
+JsonDecoder.prototype.nextArray = function () {
+  var start = this.text.indexOf("[", this.pos)
+  if (start < 0)
+    return null
+  var depth = 0
+  var inStr = false
+  var esc = false
+  for (var i = start; i < this.text.length; i++) {
+    var c = this.text.charAt(i)
+    if (inStr) {
+      if (esc)
+        esc = false
+      else if (c === "\\")
+        esc = true
+      else if (c === '"')
+        inStr = false
+      continue
+    }
+    if (c === '"')
+      inStr = true
+    else if (c === "[")
+      depth++
+    else if (c === "]") {
+      depth--
+      if (depth === 0) {
+        this.pos = i + 1
+        try {
+          return JSON.parse(this.text.substring(start, i + 1))
+        } catch (e) {
+          return null
+        }
+      }
+    }
+  }
+  return null
+}
+
+// listingCommand output → { temp: [paths], playlists: [paths] }
+function parseListing(out) {
+  var temp = []
+  var playlists = []
+  var lines = String(out || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    if (line.length < 2)
+      continue
+    var tag = line.charAt(0)
+    var p = line.substring(1)
+    if (tag === "T")
+      temp.push(p)
+    else if (tag === "P")
+      playlists.push(p)
+  }
+  return { temp: temp, playlists: playlists }
+}
+
+// Cached facets (from facetSql) filtered by query → genre/year/decade rows.
+// years: [{y: 1997, n: 4}, ...]
+function facetRows(genres, years, q) {
+  var rows = []
+  var query = String(q || "").toLowerCase()
+  if (query.length === 0)
+    return rows
+  var seenDecades = {}
+  for (var i = 0; i < years.length; i++) {
+    var y = years[i].y
+    var ys = String(y)
+    var decade = Math.floor(y / 10) * 10
+    var decadeKey = String(decade)
+    if (decadeKey.indexOf(query) === 0 && !seenDecades[decadeKey]) {
+      seenDecades[decadeKey] = true
+      rows.push({
+        kind: "decade",
+        badge: "",
+        title: decade + "s",
+        subtitle: "decade",
+        decade: decade
+      })
+    }
+    if (ys.indexOf(query) === 0)
+      rows.push({
+        kind: "year",
+        badge: "",
+        title: ys,
+        subtitle: "year · " + years[i].n + " album" + (years[i].n === 1 ? "" : "s"),
+        year: y
+      })
+  }
+  for (var j = 0; j < genres.length; j++) {
+    if (String(genres[j].g).toLowerCase().indexOf(query) >= 0)
+      rows.push({
+        kind: "genre",
+        badge: "",
+        title: String(genres[j].g),
+        subtitle: "genre · " + genres[j].n + " track" + (genres[j].n === 1 ? "" : "s")
+      })
+  }
+  return rows
+}
+
+// Local DB rows (tier,a1..a6) + listing caches → uniform result rows.
+function localRows(sqlRows, listing, q) {
+  var query = String(q || "").toLowerCase()
+  var rows = []
+  var i, r
+  for (i = 0; i < sqlRows.length; i++) {
+    r = sqlRows[i]
+    if (r.tier === "artist")
+      rows.push({
+        kind: "artist",
+        badge: "",
+        title: String(r.a1),
+        subtitle: "artist · " + r.a6 + " album" + (r.a6 === 1 ? "" : "s"),
+        artist: String(r.a1)
+      })
+    else if (r.tier === "album")
+      rows.push({
+        kind: "album",
+        badge: "",
+        title: String(r.a2),
+        subtitle: String(r.a1) + (r.a5 > 0 ? " · " + r.a5 : "") + " · " + r.a6 + " track" + (r.a6 === 1 ? "" : "s"),
+        artist: String(r.a1),
+        album: String(r.a2),
+        albumPath: String(r.a4),
+        year: r.a5
+      })
+    else if (r.tier === "song")
+      rows.push({
+        kind: "song",
+        badge: "",
+        title: String(r.a3),
+        subtitle: String(r.a2) + " · " + String(r.a1),
+        artist: String(r.a1),
+        album: String(r.a2),
+        titleField: String(r.a3),
+        path: String(r.a4),
+        duration: r.a6
+      })
+  }
+
+  for (i = 0; i < listing.playlists.length; i++) {
+    var pl = listing.playlists[i]
+    var name = basename(pl).replace(/\.(m3u8?|M3U8?)$/, "")
+    if (query.length === 0 || name.toLowerCase().indexOf(query) >= 0)
+      rows.push({
+        kind: "playlist",
+        badge: "",
+        title: name,
+        subtitle: "playlist",
+        path: pl
+      })
+  }
+
+  for (i = 0; i < listing.temp.length; i++) {
+    var tp = listing.temp[i]
+    var tname = basename(tp)
+    if (query.length === 0 || tname.toLowerCase().indexOf(query) >= 0)
+      rows.push({
+        kind: "temp",
+        badge: "Temp",
+        title: tname,
+        subtitle: "temp · " + basename(parentDir(tp)),
+        path: tp
+      })
+  }
+  return rows
+}
+
+var TIER_ORDER = {
+  artist: 0,
+  album: 1,
+  song: 2,
+  genre: 3,
+  year: 4,
+  decade: 5,
+  playlist: 6,
+  temp: 7,
+  "subsonic-artist": 8,
+  "subsonic-album": 9,
+  "subsonic-song": 10,
+  "subsonic-genre": 11,
+  "subsonic-year": 12
+}
+
+// Stable merge: favorite score (already ×1000 when the favorite matches the
+// query, else 0) first, then tier order, then source order.
+function mergeRanked(scoredRows, cap) {
+  var rows = scoredRows.slice()
+  rows.sort(function (a, b) {
+    var fa = a.favScore || 0
+    var fb = b.favScore || 0
+    if (fa !== fb)
+      return fb - fa
+    var ta = TIER_ORDER[a.row.kind] !== undefined ? TIER_ORDER[a.row.kind] : 99
+    var tb = TIER_ORDER[b.row.kind] !== undefined ? TIER_ORDER[b.row.kind] : 99
+    if (ta !== tb)
+      return ta - tb
+    return a.order - b.order
+  })
+  var out = []
+  for (var i = 0; i < rows.length && out.length < cap; i++)
+    out.push(rows[i].row)
+  return out
+}
