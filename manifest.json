@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "mds.amla",
+  "name": "Amla",
+  "version": "1.0.0",
+  "author": "mds",
+  "description": "Searchable music launcher popup: must / cliamp catalog with favorites, thumbnails, and play actions",
+  "kinds": ["menu"],
+  "entryPoints": {
+    "menu": "Amla.qml"
+  },
+  "keepLoaded": true
+}
