@@ -135,10 +135,14 @@ function parsePluginConfig(text) {
   var obj = {}
   try { obj = JSON.parse(String(text || "{}")) } catch (e) { obj = {} }
   return {
-    targetPlayer: obj.targetPlayer === "cliamp" ? "cliamp" : "must"
+    targetPlayer: obj.targetPlayer === "cliamp" ? "cliamp" : "must",
+    mustBin: obj.mustBin === undefined ? "" : String(obj.mustBin)
   }
 }
 
 function serializePluginConfig(cfg) {
-  return JSON.stringify({ targetPlayer: cfg.targetPlayer }, null, 2) + "\n"
+  return JSON.stringify({
+    targetPlayer: cfg.targetPlayer,
+    mustBin: cfg.mustBin || ""
+  }, null, 2) + "\n"
 }

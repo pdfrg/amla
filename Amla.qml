@@ -1,5 +1,6 @@
 import "Catalog.js" as Catalog
 import "Config.js" as Config
+import "Dispatch.js" as Dispatch
 import "History.js" as History
 import "Md5.js" as Md5
 import QtQuick
@@ -77,9 +78,13 @@ Item {
     readonly property string mustDb: home + "/.cache/must/library.db"
     readonly property string playlistDir: home + "/.cache/must/playlists"
     readonly property string artCacheDir: home + "/.cache/amla/art"
+    readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + home.split("/").pop())
+    property string pluginMustBin: ""
     property var artMap: ({
     })
     readonly property string buildId: "0.4.0-catalog"
+    property string pendingSubAction: ""
+    property var pendingSubRow: null
 
     function open(_payloadJson) {
         root.cardTop = -1;
@@ -242,6 +247,161 @@ Item {
         }
     }
 
+    function activate(index, action) {
+        if (index < 0 || index >= root.displayModel.length)
+            return ;
+
+        var row = root.displayModel[index];
+        if (row.kind === "action" && row.action === "random-album")
+            action = "random-album";
+
+        if (!action)
+            action = "play";
+
+        dispatch(row, action);
+    }
+
+    function historyFor(row) {
+        if (!row)
+            return null;
+
+        switch (row.kind) {
+        case "song":
+        case "subsonic-song":
+            return {
+                "type": "song",
+                "artist": row.artist || "",
+                "album": row.album || "",
+                "title": row.titleField || row.title,
+                "display": row.title,
+                "path": row.path || ""
+            };
+        case "album":
+        case "subsonic-album":
+            return {
+                "type": "album",
+                "artist": row.artist || "",
+                "album": row.album || row.title,
+                "title": "",
+                "display": row.title,
+                "path": row.albumPath || ""
+            };
+        case "artist":
+        case "subsonic-artist":
+            return {
+                "type": "artist",
+                "artist": "",
+                "album": "",
+                "title": row.title,
+                "display": row.title,
+                "path": row.path || ""
+            };
+        case "genre":
+            return {
+                "type": "genre",
+                "artist": "",
+                "album": "",
+                "title": row.title,
+                "display": row.title
+            };
+        case "year":
+            return {
+                "type": "year",
+                "artist": "",
+                "album": "",
+                "title": row.title,
+                "display": row.title
+            };
+        case "temp":
+            return {
+                "type": "temp",
+                "artist": "",
+                "album": "",
+                "title": row.title,
+                "display": row.title,
+                "path": row.path || ""
+            };
+        case "playlist":
+            return {
+                "type": "playlist",
+                "artist": "",
+                "album": "",
+                "title": row.title,
+                "display": row.title,
+                "path": row.path || ""
+            };
+        default:
+            return null;
+        }
+    }
+
+    function dispatch(row, action) {
+        var target = root.targetPlayer;
+        var ctx = {
+            "mustBin": root.pluginMustBin,
+            "query": root.filterText
+        };
+        if (target === "cliamp" && action === "random-album" && root.subEnabled) {
+            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            pendingSubAction = "play";
+            pendingSubRow = null;
+            subRandomProc.command = ["curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+            subRandomProc.running = true;
+            return ;
+        }
+        if (target === "cliamp" && row && row.kind.indexOf("subsonic-") === 0 && action !== "random-album") {
+            dispatchSubsonicCliamp(row, action);
+            return ;
+        }
+        if (target === "cliamp" && row) {
+            if (row.kind === "song" || row.kind === "playlist") {
+                ctx.files = [row.path];
+            } else if (row.kind === "temp") {
+                ctx.expandDir = row.path;
+            } else if (row.kind === "album") {
+                ctx.expandDir = row.albumPath || "";
+                if (!ctx.expandDir)
+                    ctx.files = [];
+
+            }
+        }
+        dispatchProc.script = Dispatch.build(action, row, target, ctx);
+        dispatchProc.hist = historyFor(row);
+        dispatchProc.command = ["sh", "-c", dispatchProc.script];
+        dispatchProc.running = true;
+    }
+
+    // cliamp + subsonic rows: fetch tracks, write an m3u of stream URLs, load it.
+    function dispatchSubsonicCliamp(row, action) {
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        pendingSubAction = action;
+        pendingSubRow = row;
+        if (row.kind === "subsonic-song") {
+            writeSubsonicM3u([{
+                "id": row.id,
+                "artist": row.artist,
+                "title": row.titleField || row.title,
+                "duration": row.duration || 0
+            }]);
+            return ;
+        }
+        subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
+        subAlbumProc.running = true;
+    }
+
+    function writeSubsonicM3u(tracks) {
+        var lines = ["#EXTM3U"];
+        for (var i = 0; i < tracks.length; i++) {
+            var t = tracks[i];
+            lines.push("#EXTINF:" + (t.duration || -1) + "," + (t.artist || "") + " - " + (t.title || ""));
+            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            lines.push(Subsonic.streamUrl(root.sub.url, auth, t.id));
+        }
+        m3uFile.path = root.runtimeDir + "/amla/sub-" + Date.now() + ".m3u";
+        pendingM3uText = lines.join("\n") + "\n";
+        m3uFile.setText(pendingM3uText);
+    }
+
     function refreshListings() {
         listingProc.command = ["sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
         listingProc.running = true;
@@ -258,9 +418,34 @@ Item {
     }
 
     function refresh() {
+        refreshCatalog();
+        return "ok";
+    }
+
+    function refreshCatalog() {
         refreshListings();
         refreshFacets();
-        return "ok";
+        artMap = ({
+        });
+        flushArtProc.command = ["sh", "-c", "rm -rf " + Catalog.shq(root.artCacheDir) + "; mkdir -p " + Catalog.shq(root.artCacheDir)];
+        flushArtProc.running = true;
+        rescanProc.command = ["sh", "-c", Dispatch.mustBinScript(root.pluginMustBin) + "\nif " + Dispatch.mustRunningExpr() + "; then \"$BIN\" rescan; fi"];
+        rescanProc.running = true;
+    }
+
+    function enqueueRandom() {
+        var songs = [];
+        for (var i = 0; i < root.displayModel.length; i++) {
+            var k = root.displayModel[i].kind;
+            if (k === "song" || k === "subsonic-song")
+                songs.push(root.displayModel[i]);
+
+        }
+        if (songs.length === 0)
+            return ;
+
+        var row = songs[Math.floor(Math.random() * songs.length)];
+        dispatch(row, "enqueue");
     }
 
     function recordMprisPlay() {
@@ -411,6 +596,116 @@ Item {
 
     }
 
+    FileView {
+        id: m3uFile
+
+        watchChanges: false
+        printErrors: false
+    }
+
+    Timer {
+        id: m3uDispatchTimer
+
+        interval: 200
+        onTriggered: {
+            dispatchProc.script = Dispatch.build(root.pendingSubAction, root.pendingSubRow, "cliamp", {
+                "m3uPath": m3uFile.path,
+                "mustBin": root.pluginMustBin
+            });
+            dispatchProc.command = ["sh", "-c", dispatchProc.script];
+            dispatchProc.running = true;
+        }
+    }
+
+    Connections {
+        function onTextChanged() {
+            if (root.pendingM3uText.length > 0 && m3uFile.text() === root.pendingM3uText) {
+                root.pendingM3uText = "";
+                m3uDispatchTimer.restart();
+            }
+        }
+
+        target: m3uFile
+    }
+
+    Process {
+        id: subRandomProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var alb = (sub && sub.albumList2 && sub.albumList2.album && sub.albumList2.album[0]) || null;
+                if (!alb)
+                    return ;
+
+                root.pendingSubRow = {
+                    "kind": "subsonic-album",
+                    "id": alb.id || "",
+                    "album": alb.name || "",
+                    "artist": alb.artist || "",
+                    "title": alb.name || ""
+                };
+                root.dispatchSubsonicCliamp(root.pendingSubRow, "play");
+            }
+        }
+
+    }
+
+    Process {
+        id: subAlbumProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var tracks = (sub && sub.album && sub.album.song) || [];
+                root.writeSubsonicM3u(tracks);
+            }
+        }
+
+    }
+
+    Process {
+        id: dispatchProc
+
+        property string script: ""
+        property var hist: null
+
+        onExited: function(exitCode) {
+            if (exitCode !== 0 || !dispatchProc.hist)
+                return ;
+
+            var h = dispatchProc.hist;
+            History.recordPlay(h.type, h.artist, h.album, h.title, h.display, h.path || "");
+            historyFile.setText(History.serialize());
+            rebuildDisplay();
+        }
+
+        stdout: StdioCollector {
+            waitForEnd: true
+        }
+
+    }
+
+    Process {
+        id: flushArtProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+        }
+
+    }
+
+    Process {
+        id: rescanProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+        }
+
+    }
+
     Process {
         id: facetProc
 
@@ -468,7 +763,11 @@ Item {
         path: root.home + "/.config/amla/config.json"
         watchChanges: true
         printErrors: false
-        onLoaded: root.targetPlayer = Config.parsePluginConfig(text()).targetPlayer
+        onLoaded: {
+            var pc = Config.parsePluginConfig(text());
+            root.targetPlayer = pc.targetPlayer;
+            root.pluginMustBin = pc.mustBin || "";
+        }
     }
 
     PanelWindow {
@@ -552,6 +851,25 @@ Item {
                             event.accepted = true;
                         } else if (event.key === Qt.Key_End && root.displayModel.length > 0) {
                             root.selectedIndex = root.displayModel.length - 1;
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                            if (event.modifiers & Qt.AltModifier) {
+                                if (event.modifiers & Qt.ShiftModifier)
+                                    root.enqueueRandom();
+                                else
+                                    root.activate(root.selectedIndex, "playshuffle");
+                            } else if (event.modifiers & Qt.ControlModifier)
+                                root.activate(root.selectedIndex, "enqueue-next");
+                            else if (event.modifiers & Qt.ShiftModifier)
+                                root.activate(root.selectedIndex, "enqueue");
+                            else
+                                root.activate(root.selectedIndex, "play");
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_R && (event.modifiers & Qt.AltModifier)) {
+                            root.dispatch(null, "random-album");
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
+                            root.refreshCatalog();
                             event.accepted = true;
                         } else if (event.key === Qt.Key_T && (event.modifiers & Qt.ControlModifier)) {
                             root.toggleTargetPlayer();
