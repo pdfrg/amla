@@ -23,7 +23,7 @@ function keyFor(type, artist, album, title) {
         return (artist || "") + "|" + (album || "") + "|" + (title || "")
     if (type === "album")
         return (artist || "") + "|" + (album || "")
-    return type === "year" ? String(album || "") : (title || artist || album || "")
+    return type === "year" ? String(title || album || "") : (title || artist || album || "")
 }
 
 function rowKey(row) {

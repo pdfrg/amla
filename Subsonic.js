@@ -1,0 +1,173 @@
+.import "Md5.js" as Md5
+// Subsonic client helpers: URL builders + response shaping. Pure JS; HTTP
+// runs elsewhere (fetch in tests, curl via Process in the plugin).
+// Auth per plan: token = md5(password+salt), params u,t,s,v,c=amla.
+
+function authParams(username, password, salt) {
+    return "u=" + encodeURIComponent(username) +
+        "&t=" + Md5.subsonicToken(password, salt) +
+        "&s=" + salt +
+        "&v=1.16.1" +
+        "&c=amla" +
+        "&f=json"
+}
+
+function apiUrl(baseUrl, path, query) {
+    return baseUrl.replace(/\/+$/, "") + "/rest/" + path + "?" + query
+}
+
+function search3Url(baseUrl, auth, query) {
+    return apiUrl(baseUrl, "search3", auth +
+        "&query=" + encodeURIComponent(String(query || "")) +
+        "&artistCount=8&albumCount=20&songCount=40")
+}
+
+function genresUrl(baseUrl, auth) {
+    return apiUrl(baseUrl, "getGenres", auth)
+}
+
+function byYearUrl(baseUrl, auth) {
+    return apiUrl(baseUrl, "getAlbumList2", auth +
+        "&type=byYear&fromYear=0&toYear=9999&size=500")
+}
+
+function randomAlbumUrl(baseUrl, auth) {
+    return apiUrl(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
+}
+
+function coverArtUrl(baseUrl, auth, coverArtId, size) {
+    return apiUrl(baseUrl, "getCoverArt", auth +
+        "&id=" + encodeURIComponent(String(coverArtId || "")) +
+        "&size=" + (size || 96))
+}
+
+function streamUrl(baseUrl, auth, songId) {
+    return apiUrl(baseUrl, "stream", auth + "&id=" + encodeURIComponent(String(songId || "")))
+}
+
+function getSubsonic(res) {
+    var body = typeof res === "string" ? JSON.parse(res) : res
+    var sub = body && body["subsonic-response"]
+    if (!sub || sub.status !== "ok")
+        return null
+    return sub
+}
+
+// search3 response → uniform rows (badge = server name).
+function searchRows(sub, serverName, serverBadge, query) {
+    var out = []
+    if (!sub)
+        return out
+    var q = String(query || "").toLowerCase()
+    var i, a
+    var artists = (sub.searchResult3 && sub.searchResult3.artist) || []
+    for (i = 0; i < artists.length; i++) {
+        a = artists[i]
+        if (String(a.name).toLowerCase().indexOf(q) < 0)
+            continue
+        out.push({
+            "kind": "subsonic-artist",
+            "badge": serverBadge,
+            "title": String(a.name),
+            "subtitle": (serverName || "Subsonic") + " · artist",
+            "artist": String(a.name),
+            "coverArt": a.coverArt || "",
+            "id": a.id || ""
+        })
+    }
+    var albums = (sub.searchResult3 && sub.searchResult3.album) || []
+    for (i = 0; i < albums.length; i++) {
+        a = albums[i]
+        if (String(a.name).toLowerCase().indexOf(q) < 0 && String(a.artist || "").toLowerCase().indexOf(q) < 0)
+            continue
+        out.push({
+            "kind": "subsonic-album",
+            "badge": serverBadge,
+            "title": String(a.name),
+            "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + " · " + (serverName || "Subsonic"),
+            "artist": String(a.artist || ""),
+            "album": String(a.name),
+            "coverArt": a.coverArt || "",
+            "id": a.id || "",
+            "year": a.year || 0
+        })
+    }
+    var songs = (sub.searchResult3 && sub.searchResult3.song) || []
+    for (i = 0; i < songs.length; i++) {
+        a = songs[i]
+        if (String(a.title).toLowerCase().indexOf(q) < 0 && String(a.artist || "").toLowerCase().indexOf(q) < 0)
+            continue
+        out.push({
+            "kind": "subsonic-song",
+            "badge": serverBadge,
+            "title": String(a.title),
+            "subtitle": String(a.album || "") + " · " + String(a.artist || "") + " · " + (serverName || "Subsonic"),
+            "artist": String(a.artist || ""),
+            "album": String(a.album || ""),
+            "titleField": String(a.title),
+            "coverArt": a.coverArt || "",
+            "id": a.id || "",
+            "duration": a.duration || 0
+        })
+    }
+    return out
+}
+
+// getGenres → [{g, n}] (genre rows filtered client-side by Catalog.facetRows).
+function genreFacets(sub) {
+    if (!sub || !sub.genres || !sub.genres.genre)
+        return []
+    var out = []
+    var arr = sub.genres.genre
+    for (var i = 0; i < arr.length; i++)
+        out.push({
+            "g": String(arr[i].value || arr[i].content || ""),
+            "n": arr[i].albumCount || 0
+        })
+    return out
+}
+
+// getAlbumList2(byYear) → [{y, n}] histogram for year/decade rows.
+function yearFacets(sub) {
+    if (!sub || !sub.albumList2 || !sub.albumList2.album)
+        return []
+    var counts = {}
+    var order = []
+    var arr = sub.albumList2.album
+    for (var i = 0; i < arr.length; i++) {
+        var y = arr[i].year || 0
+        if (y <= 0)
+            continue
+        if (counts[y] === undefined) {
+            counts[y] = 0
+            order.push(y)
+        }
+        counts[y]++
+    }
+    order.sort(function (a, b) { return a - b })
+    var out = []
+    for (var j = 0; j < order.length; j++)
+        out.push({
+            "y": order[j],
+            "n": counts[order[j]]
+        })
+    return out
+}
+
+// getAlbumList2(random) → single subsonic-album row for "play random album".
+function randomAlbumRow(sub, serverName, serverBadge) {
+    if (!sub || !sub.albumList2 || !sub.albumList2.album || !sub.albumList2.album.length)
+        return null
+    var a = sub.albumList2.album[0]
+    return {
+        "kind": "subsonic-album",
+        "badge": serverBadge,
+        "title": String(a.name || ""),
+        "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + " · " + (serverName || "Subsonic"),
+        "artist": String(a.artist || ""),
+        "album": String(a.name || ""),
+        "coverArt": a.coverArt || "",
+        "id": a.id || "",
+        "year": a.year || 0
+    }
+}

@@ -1,10 +1,12 @@
 import "Catalog.js" as Catalog
 import "Config.js" as Config
 import "History.js" as History
+import "Md5.js" as Md5
 import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import "Subsonic.js" as Subsonic
 import qs.Commons
 import qs.Ui
 
@@ -45,6 +47,12 @@ Item {
     })
     property var searchRows: []
     property string searchedQuery: ""
+    property var subRows: []
+    property string subSearchedQuery: ""
+    property var subGenres: []
+    property var subYears: []
+    readonly property var sub: mustConfig.subsonic
+    readonly property bool subEnabled: sub.enabled && sub.url.length > 0 && sub.password.length > 0
     property int searchSerial: 0
     property bool searchDirty: false
     readonly property string mustDb: home + "/.cache/must/library.db"
@@ -127,10 +135,21 @@ Item {
             rows = Catalog.facetRows(root.facetGenres, root.facetYears, q);
             var cached = Catalog.localRows([], root.listing, q);
             rows = rows.concat(cached);
+            if (root.subEnabled) {
+                var subFacets = Catalog.facetRows(root.subGenres, root.subYears, q);
+                for (var sfi = 0; sfi < subFacets.length; sfi++) {
+                    subFacets[sfi].kind = "subsonic-" + subFacets[sfi].kind;
+                    subFacets[sfi].badge = root.sub.serverBadge;
+                }
+                rows = rows.concat(subFacets);
+            }
             if (root.searchedQuery === q) {
                 var locals = Catalog.localRows(root.searchRows, root.listing, q);
                 rows = locals.concat(rows);
             }
+            if (root.subSearchedQuery === q)
+                rows = rows.concat(root.subRows);
+
         }
         root.displayModel = Catalog.mergeRanked(scoredRows(rows, q), 60);
     }
@@ -161,6 +180,11 @@ Item {
     function refreshFacets() {
         facetProc.command = ["sqlite3", "-json", root.mustDb, Catalog.facetSql()];
         facetProc.running = true;
+        if (root.subEnabled) {
+            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            subFacetProc.command = ["sh", "-c", "curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'"];
+            subFacetProc.running = true;
+        }
     }
 
     function refresh() {
@@ -213,6 +237,41 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 root.listing = Catalog.parseListing(text);
+                root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    Process {
+        id: subSearchProc
+
+        property string query: ""
+        property string auth: ""
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                root.subRows = Subsonic.searchRows(sub, root.sub.serverName, root.sub.serverBadge, subSearchProc.query);
+                root.subSearchedQuery = subSearchProc.query;
+                root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    Process {
+        id: subFacetProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var parts = String(text || "").split("---AMLASPLIT---");
+                var g = Subsonic.getSubsonic(parts[0] || "");
+                var y = Subsonic.getSubsonic(parts[1] || "");
+                root.subGenres = Subsonic.genreFacets(g);
+                root.subYears = Subsonic.yearFacets(y);
                 root.rebuildDisplay();
             }
         }
