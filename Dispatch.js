@@ -10,8 +10,10 @@
 // <op> --params <json> --wait` against ~/.config/cliamp/cliamp.sock.
 // url.load resolves a directory (recursive scan, embedded tags), an .m3u
 // (relative paths resolved from the file), or a single URL; "play": true
-// starts the appended material. track.play plays a supplied track,
-// track.queue queues one next, queue appends one path. Op names and params
+// starts the appended material. track.play appends a supplied track and
+// plays it, queue appends one path, queue.clear / queue.list / queue.move
+// implement clear-first play and must-style insert-next (jq required for
+// the latter, graceful append fallback without it). Op names and params
 // are passed through env (AMLA_OP/AMLA_PARAMS/AMLA_M3U) — no shell quoting.
 
 function shq(s) {
@@ -134,6 +136,16 @@ function build(action, row, target, ctx) {
     // errors (e.g. empty queue). Enqueue / enqueue-next append by design.
     if (ctx.clearFirst)
         runOp = "cliamp remote call \"queue.clear\" --params \"{}\" --wait >/dev/null 2>&1\n  " + runOp
+    // must-style insert-next: snapshot the current track path and length,
+    // append via the op, then move the appended range to right after the
+    // current track (ascending moves preserve order). queue.list's own
+    // index only reflects load/play ops, so match snapshot.track.path
+    // against the post-load list instead. No jq, or no match (stopped) →
+    // plain append. Enqueue appends by design (no flag).
+    if (ctx.insertNext) {
+        runOp = "if command -v jq >/dev/null 2>&1; then SNAP=$(cliamp remote call \"runtime.snapshot\" --params '{}' --wait 2>/dev/null)\n    P=$(printf '%s' \"$SNAP\" | jq -r '.snapshot.track.path // empty')\n    N0=$(cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | jq -r '.job.result.total // 0')\n  else P=\"\"\n    N0=0\n  fi\n  " + runOp +
+            "\n  CUR=\"\"\n  if [ -n \"$P\" ]; then CUR=$(cliamp remote call \"queue.list\" --params '{\"limit\":5000}' --wait 2>/dev/null | jq -r --arg p \"$P\" '.job.result.tracks | to_entries | map(select(.value.path == $p)) | .[0].key // empty')\n  fi\n  if [ -n \"$CUR\" ]; then\n    N1=$(cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | jq -r '.job.result.total // 0')\n    T=$((CUR + 1))\n    I=$((N0 + 0))\n    N1=$((N1 + 0))\n    while [ \"$I\" -lt \"$N1\" ]; do\n      cliamp remote call \"queue.move\" --params \"{\\\"index\\\":$I,\\\"to\\\":$T}\" --wait >/dev/null 2>&1\n      I=$((I + 1))\n      T=$((T + 1))\n    done\n  fi"
+    }
     var prep = ""
     if (ctx.m3uBody)
         prep = "mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "

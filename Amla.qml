@@ -374,11 +374,16 @@ Item {
                         "play": action === "play"
                     },
                     "clearFirst": action === "play",
+                    "insertNext": action === "enqueue-next",
                     "launchTarget": su
                 });
                 return ;
             }
             if (row.kind === "song") {
+                // must-style insert-next: append one path, Dispatch moves
+                // it after the current track (track.queue is cliamp's
+                // play-next stack with return-to-position semantics).
+
                 var tr = {
                     "path": row.path,
                     "title": row.titleField || row.title,
@@ -396,10 +401,11 @@ Item {
                 });
                 else if (action === "enqueue-next")
                     runCliamp(row, action, {
-                    "op": "track.queue",
+                    "op": "queue",
                     "params": {
-                        "track": tr
-                    }
+                        "path": row.path
+                    },
+                    "insertNext": true
                 });
                 else
                     runCliamp(row, action, {
@@ -419,6 +425,7 @@ Item {
                         "play": action === "play"
                     },
                     "clearFirst": action === "play",
+                    "insertNext": action === "enqueue-next",
                     "launchTarget": row.path
                 });
                 return ;
@@ -431,6 +438,7 @@ Item {
                         "play": action === "play"
                     },
                     "clearFirst": action === "play",
+                    "insertNext": action === "enqueue-next",
                     "launchTarget": row.path
                 });
                 return ;
@@ -783,6 +791,7 @@ Item {
                         "play": (root.pendingSubAction || "enqueue") === "play"
                     },
                     "clearFirst": (root.pendingSubAction || "enqueue") === "play",
+                    "insertNext": (root.pendingSubAction || "enqueue") === "enqueue-next",
                     "m3uBody": body,
                     "launchTarget": urls[0]
                 });
@@ -818,6 +827,7 @@ Item {
                         "play": (root.pendingSubAction || "play") === "play"
                     },
                     "clearFirst": (root.pendingSubAction || "play") === "play",
+                    "insertNext": (root.pendingSubAction || "play") === "enqueue-next",
                     "m3uBody": body,
                     "launchTarget": urls[0]
                 });
@@ -845,6 +855,7 @@ Item {
                         "play": action === "play"
                     },
                     "clearFirst": action === "play",
+                    "insertNext": action === "enqueue-next",
                     "launchTarget": m3u
                 });
             }
