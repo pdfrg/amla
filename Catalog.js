@@ -370,6 +370,30 @@ function parseArtOutput(outText) {
     return map
 }
 
+// Ordered artwork candidate dirs for a row (first hit wins in artFor).
+// Artist rows probe the artist dir first (nested /artist/album/ layouts
+// keep artist.jpg there), falling back to a representative album dir
+// (flat /artist - album/ layouts). Others use artDirFor directly.
+function artDirsFor(row) {
+    if (!row)
+        return []
+    if (row.kind === "artist") {
+        var d = row.albumPath || row.path || ""
+        if (!d)
+            return []
+        var albumDir = parentDir(d)
+        var artistDir = parentDir(albumDir)
+        var out = []
+        if (artistDir && artistDir !== albumDir)
+            out.push(artistDir)
+        if (albumDir)
+            out.push(albumDir)
+        return out
+    }
+    var single = artDirFor(row)
+    return single ? [single] : []
+}
+
 // Directory whose artwork represents a row.
 function artDirFor(row) {
     if (!row)

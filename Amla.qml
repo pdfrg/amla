@@ -13,6 +13,10 @@ import qs.Commons
 import qs.Ui
 
 Item {
+    // must-style insert-next: append one path, Dispatch moves
+    // it after the current track (track.queue is cliamp's
+    // play-next stack with return-to-position semantics).
+
     id: root
 
     // Injected by omarchy-shell when this plugin is summoned.
@@ -186,9 +190,17 @@ Item {
 
     // ----- artwork (plan step 6) -----
     function artFor(row) {
-        var key = row.kind.indexOf("subsonic-") === 0 ? Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir) : Catalog.artDirFor(row);
-        var f = artMap[key];
-        return f || "";
+        if (row.kind.indexOf("subsonic-") === 0) {
+            var cache = Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir);
+            return artMap[cache] || "";
+        }
+        var dirs = Catalog.artDirsFor(row);
+        for (var di = 0; di < dirs.length; di++) {
+            if (artMap[dirs[di]])
+                return artMap[dirs[di]];
+
+        }
+        return "";
     }
 
     function artJobs() {
@@ -209,13 +221,17 @@ Item {
                     };
                 }
             } else {
-                var dir = Catalog.artDirFor(row);
-                if (dir.length > 0)
-                    job = {
-                    "dir": dir,
-                    "out": ""
-                };
-
+                var dirs = Catalog.artDirsFor(row);
+                for (var dji = 0; dji < dirs.length; dji++) {
+                    var dkey = dirs[dji] + "|";
+                    if (!seen[dkey]) {
+                        seen[dkey] = true;
+                        jobs.push({
+                            "dir": dirs[dji],
+                            "out": ""
+                        });
+                    }
+                }
             }
             if (job && !seen[job.dir + "|" + job.out]) {
                 seen[job.dir + "|" + job.out] = true;
@@ -343,10 +359,6 @@ Item {
     }
 
     function dispatch(row, action) {
-        // must-style insert-next: append one path, Dispatch moves
-        // it after the current track (track.queue is cliamp's
-        // play-next stack with return-to-position semantics).
-
         var target = root.targetPlayer;
         var ctx = {
             "mustBin": root.pluginMustBin,
