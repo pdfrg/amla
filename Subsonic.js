@@ -16,6 +16,22 @@ function apiUrl(baseUrl, path, query) {
     return baseUrl.replace(/\/+$/, "") + "/rest/" + path + "?" + query
 }
 
+// Uniform song subtext: "song · Artist - Album" (parts omitted when
+// empty, optional trailing source tag for remote rows).
+function songSubtitle(artist, album, suffix) {
+    var parts = []
+    if (artist)
+        parts.push(artist)
+    if (album)
+        parts.push(album)
+    var s = "song"
+    if (parts.length > 0)
+        s += " · " + parts.join(" - ")
+    if (suffix)
+        s += " · " + suffix
+    return s
+}
+
 function search3Url(baseUrl, auth, query) {
     return apiUrl(baseUrl, "search3", auth +
         "&query=" + encodeURIComponent(String(query || "")) +
@@ -101,7 +117,7 @@ function searchRows(sub, serverName, serverBadge, query) {
             "kind": "subsonic-song",
             "badge": serverBadge,
             "title": String(a.title),
-            "subtitle": String(a.album || "") + " · " + String(a.artist || "") + " · " + (serverName || "Subsonic"),
+            "subtitle": songSubtitle(String(a.artist || ""), String(a.album || ""), (serverName || "Subsonic")),
             "artist": String(a.artist || ""),
             "album": String(a.album || ""),
             "titleField": String(a.title),

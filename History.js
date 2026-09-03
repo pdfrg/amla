@@ -172,6 +172,19 @@ function recentPlays(n) {
     return recent.slice(0, n)
 }
 
+// Uniform song subtext: "song · Artist - Album" (parts omitted when empty).
+function songSubtitle(artist, album) {
+    var parts = []
+    if (artist)
+        parts.push(artist)
+    if (album)
+        parts.push(album)
+    var s = "song"
+    if (parts.length > 0)
+        s += " · " + parts.join(" - ")
+    return s
+}
+
 function favoriteRow(it) {
     var kindMap = {
         "song": "song",
@@ -183,11 +196,14 @@ function favoriteRow(it) {
         "temp": "temp"
     }
     var kind = kindMap[it.type] || "artist"
+    var subtitle = kind + (it.album && kind === "song" ? " · " + it.album : "")
+    if (kind === "song")
+        subtitle = songSubtitle(it.artist, it.album, "")
     var row = {
         "kind": kind,
         "badge": "",
         "title": it.display || it.title || it.album || it.artist,
-        "subtitle": kind + (it.album && kind === "song" ? " · " + it.album : ""),
+        "subtitle": subtitle,
         "star": true,
         "artist": it.artist,
         "album": it.album,

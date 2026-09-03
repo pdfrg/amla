@@ -36,6 +36,22 @@ function likeCond(q) {
   return "LIKE '%" + e + "%' ESCAPE '\\'"
 }
 
+// Uniform song subtext: "song · Artist - Album" (parts omitted when
+// empty, optional trailing source tag for remote rows).
+function songSubtitle(artist, album, suffix) {
+  var parts = []
+  if (artist)
+    parts.push(artist)
+  if (album)
+    parts.push(album)
+  var s = "song"
+  if (parts.length > 0)
+    s += " · " + parts.join(" - ")
+  if (suffix)
+    s += " · " + suffix
+  return s
+}
+
 // One batched statement: artists, albums, songs tiers via the same FTS match.
 // Column aliases a1..a6 keep the union shapes identical.
 function localSearchSql(q) {
@@ -264,7 +280,7 @@ function localRows(sqlRows, listing, q) {
         kind: "song",
         badge: "",
         title: String(r.a3),
-        subtitle: String(r.a2) + " · " + String(r.a1),
+        subtitle: songSubtitle(String(r.a1), String(r.a2), ""),
         artist: String(r.a1),
         album: String(r.a2),
         titleField: String(r.a3),
