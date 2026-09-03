@@ -31,7 +31,7 @@ Item {
     property var mustConfig: Config.mustConfig("", Quickshell.env("HOME") || "")
     readonly property string home: Quickshell.env("HOME") || ""
     readonly property int cardWidth: 680
-    readonly property real rowHeight: Style.space(44)
+    readonly property real rowHeight: Style.space(58)
     readonly property int maxRows: 14
     readonly property bool emptyQuery: filterText.length === 0
     // Popup chrome, mirroring the omarchy menu card.
@@ -39,6 +39,7 @@ Item {
     readonly property color scrim: Color.menu.scrim
     readonly property real cornerRadius: Style.cornerRadius
     readonly property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
+    readonly property var selectedBorderSpec: Border.surfaceSpec("menu", "selected-border", Color.menu.selectedBorder, 0)
     // Card top freezes on the first search keystroke so the card grows
     // downward instead of re-centering on every resize (menu pattern).
     property int cardTop: -1
@@ -1107,8 +1108,8 @@ Item {
                     Text {
                         text: ">"
                         color: Color.menu.selectedText
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.body
+                        font.family: Style.font.menuFamily
+                        font.pixelSize: Style.font.heading
                         font.bold: true
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -1118,8 +1119,8 @@ Item {
 
                         text: root.filterText.length > 0 ? root.filterText : "type to search"
                         color: root.filterText.length > 0 ? Color.menu.text : Color.muted
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.body
+                        font.family: Style.font.menuFamily
+                        font.pixelSize: Style.font.heading
                         font.italic: root.filterText.length === 0
                         elide: Text.ElideRight
                         anchors.verticalCenter: parent.verticalCenter
@@ -1161,7 +1162,7 @@ Item {
                     currentIndex: root.selectedIndex
                     onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
 
-                    delegate: Rectangle {
+                    delegate: BorderSurface {
                         required property var modelData
                         required property int index
 
@@ -1169,6 +1170,7 @@ Item {
                         height: root.rowHeight
                         radius: Style.cornerRadius
                         color: index === root.selectedIndex ? Color.menu.selectedBackground : (rowHover.hovered ? Style.hoverFillFor(Color.menu.text, Color.menu.selectedText, Color.urgent) : "transparent")
+                        borderSpec: index === root.selectedIndex ? root.selectedBorderSpec : Border.none()
 
                         MouseArea {
                             id: rowHover
@@ -1228,16 +1230,18 @@ Item {
                                 Text {
                                     text: modelData.title
                                     color: index === root.selectedIndex ? Color.menu.selectedText : Color.menu.text
-                                    font.family: Style.font.family
-                                    font.pixelSize: Style.font.body
+                                    font.family: Style.font.menuFamily
+                                    font.pixelSize: Style.font.heading
+                                    font.weight: Font.Medium
                                     elide: Text.ElideRight
                                     width: parent.width
                                 }
 
                                 Text {
                                     text: modelData.subtitle
-                                    color: Color.muted
-                                    font.family: Style.font.family
+                                    color: Color.menu.text
+                                    opacity: 0.52
+                                    font.family: Style.font.menuFamily
                                     font.pixelSize: Style.font.bodySmall
                                     elide: Text.ElideRight
                                     width: parent.width
