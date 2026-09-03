@@ -233,7 +233,8 @@ function localRows(sqlRows, listing, q) {
         badge: "",
         title: String(r.a1),
         subtitle: "artist · " + r.a6 + " album" + (r.a6 === 1 ? "" : "s"),
-        artist: String(r.a1)
+        artist: String(r.a1),
+        albumPath: String(r.a4)
       })
     else if (r.tier === "album")
       rows.push({
@@ -375,14 +376,14 @@ function artDirFor(row) {
         return ""
     switch (row.kind) {
     case "album":
-        return row.albumPath || ""
+        return row.albumPath ? parentDir(row.albumPath) : ""
     case "song":
     case "subsonic-song":
         return row.path ? parentDir(row.path) : (row.albumPath || "")
     case "temp":
         return row.path || ""
     case "artist":
-        return row.path ? parentDir(row.path) : ""
+        return (row.albumPath || row.path) ? parentDir(row.albumPath || row.path) : ""
     default:
         return ""
     }

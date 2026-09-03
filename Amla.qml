@@ -343,6 +343,10 @@ Item {
     }
 
     function dispatch(row, action) {
+        // must-style insert-next: append one path, Dispatch moves
+        // it after the current track (track.queue is cliamp's
+        // play-next stack with return-to-position semantics).
+
         var target = root.targetPlayer;
         var ctx = {
             "mustBin": root.pluginMustBin,
@@ -362,10 +366,6 @@ Item {
             return ;
         }
         if (target === "cliamp" && row) {
-            // must-style insert-next: append one path, Dispatch moves
-            // it after the current track (track.queue is cliamp's
-            // play-next stack with return-to-position semantics).
-
             if (row.kind.indexOf("subsonic-") === 0) {
                 // cliamp v2 has a native navidrome provider, but the launcher
                 // owns the REST queries — route everything through stream
@@ -1199,7 +1199,7 @@ Item {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: ""
+                                    text: "♪"
                                     color: Color.muted
                                     font.family: Style.font.menuFamily
                                     font.pixelSize: Style.font.icon
