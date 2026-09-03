@@ -142,9 +142,10 @@ Item {
         for (var i = 0; i < rows.length; i++) {
             var key = History.rowKey(rows[i]);
             var score = 0;
-            if (favs[key] !== undefined)
+            if (favs[key] !== undefined) {
                 score = History.scoreOf(favs[key]) * 1000;
-
+                rows[i].star = true;
+            }
             out.push({
                 "row": rows[i],
                 "favScore": score,
@@ -260,6 +261,11 @@ Item {
             action = "play";
 
         dispatch(row, action);
+        // play / play-next / random dismiss the popup; enqueue stays open
+        // for queueing more without re-summoning.
+        if (action !== "enqueue")
+            root.cancel();
+
     }
 
     function historyFor(row) {
@@ -356,6 +362,10 @@ Item {
             return ;
         }
         if (target === "cliamp" && row) {
+            // must-style insert-next: append one path, Dispatch moves
+            // it after the current track (track.queue is cliamp's
+            // play-next stack with return-to-position semantics).
+
             if (row.kind.indexOf("subsonic-") === 0) {
                 // cliamp v2 has a native navidrome provider, but the launcher
                 // owns the REST queries — route everything through stream
@@ -380,10 +390,6 @@ Item {
                 return ;
             }
             if (row.kind === "song") {
-                // must-style insert-next: append one path, Dispatch moves
-                // it after the current track (track.queue is cliamp's
-                // play-next stack with return-to-position semantics).
-
                 var tr = {
                     "path": row.path,
                     "title": row.titleField || row.title,
@@ -1272,10 +1278,12 @@ Item {
                 }
 
                 Text {
-                    text: "enter: play   shift+enter: enqueue   ctrl+enter: play next   alt+r: random album   ctrl+t: player   esc: close"
+                    text: "enter: play   shift+enter: enqueue   ctrl+enter: play next   alt+r: random album   ctrl+t: player"
                     color: Color.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideRight
+                    width: parent.width
                     visible: root.displayModel.length > 0
                 }
 
