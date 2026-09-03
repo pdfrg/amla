@@ -249,12 +249,11 @@ function facetRows(genres, years, q) {
 }
 
 // Local DB rows (tier,a1..a6) + listing caches → uniform result rows.
-function localRows(sqlRows, listing, q) {
-  var query = String(q || "").toLowerCase()
+// DB tiers only (no listing rows): safe to call alongside listingRows.
+function localDbRows(sqlRows) {
   var rows = []
-  var i, r
-  for (i = 0; i < sqlRows.length; i++) {
-    r = sqlRows[i]
+  for (var i = 0; i < sqlRows.length; i++) {
+    var r = sqlRows[i]
     if (r.tier === "artist")
       rows.push({
         kind: "artist",
@@ -288,8 +287,16 @@ function localRows(sqlRows, listing, q) {
         duration: r.a6
       })
   }
+  return rows
+}
 
-  for (i = 0; i < listing.playlists.length; i++) {
+// Playlists + temp albums from the cached directory listing. Call exactly
+// once per rebuild -- localDbRows never includes these, so the two compose
+// without duplicating (previously both came from one function called twice).
+function listingRows(listing, q) {
+  var query = String(q || "").toLowerCase()
+  var rows = []
+  for (var i = 0; i < listing.playlists.length; i++) {
     var pl = listing.playlists[i]
     var name = basename(pl).replace(/\.(m3u8?|M3U8?)$/, "")
     if (query.length === 0 || name.toLowerCase().indexOf(query) >= 0)

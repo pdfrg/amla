@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0006"
+    readonly property string buildId: "0.5.0007"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -171,7 +171,7 @@ Item {
             rows = History.emptyStateRows(root.mustConfig, root.listing);
         } else {
             rows = Catalog.facetRows(root.facetGenres, root.facetYears, q);
-            var cached = Catalog.localRows([], root.listing, q);
+            var cached = Catalog.listingRows(root.listing, q);
             rows = rows.concat(cached);
             if (root.subEnabled) {
                 var subFacets = Catalog.facetRows(root.subGenres, root.subYears, q);
@@ -182,7 +182,7 @@ Item {
                 rows = rows.concat(subFacets);
             }
             if (root.searchedQuery === q) {
-                var locals = Catalog.localRows(root.searchRows, root.listing, q);
+                var locals = Catalog.localDbRows(root.searchRows);
                 rows = locals.concat(rows);
             }
             if (root.subSearchedQuery === q)
