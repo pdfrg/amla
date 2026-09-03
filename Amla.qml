@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0004"
+    readonly property string buildId: "0.5.0005"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -302,7 +302,9 @@ Item {
                 "album": row.album || "",
                 "title": row.titleField || row.title,
                 "display": row.title,
-                "path": row.path || ""
+                "path": row.path || "",
+                "coverArt": row.coverArt || "",
+                "subId": row.id || ""
             };
         case "album":
         case "subsonic-album":
@@ -312,7 +314,9 @@ Item {
                 "album": row.album || row.title,
                 "title": "",
                 "display": row.title,
-                "path": row.albumPath || ""
+                "path": row.albumPath || "",
+                "coverArt": row.coverArt || "",
+                "subId": row.id || ""
             };
         case "artist":
         case "subsonic-artist":
@@ -322,7 +326,9 @@ Item {
                 "album": "",
                 "title": row.title,
                 "display": row.title,
-                "path": row.path || ""
+                "path": row.path || "",
+                "coverArt": row.coverArt || "",
+                "subId": row.id || ""
             };
         case "genre":
             return {
@@ -514,6 +520,22 @@ Item {
         (row.kind === "subsonic-artist" ? subArtistProc : subAlbumProc).running = true;
     }
 
+    // One indexed lookup per new MPRIS track: backfill the file path the
+    // player never reports, so artwork (and future lookups) resolve.
+    // Normalized title (Artist-prefix stripped) matches recordPlay's key.
+    function resolveMprisPath(key, artist, album, title) {
+        if (mprisPathProc.running)
+            return ;
+
+        mprisPathProc.lookupKey = key;
+        mprisPathProc.environment = {
+            "AMLA_DB": root.mustDb,
+            "AMLA_SQL": Catalog.trackPathSql(artist, album, History.stripArtistPrefix(artist, title))
+        };
+        mprisPathProc.command = ["sh", "-c", "sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\""];
+        mprisPathProc.running = true;
+    }
+
     function refreshListings() {
         listingProc.command = ["sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
         listingProc.running = true;
@@ -574,6 +596,7 @@ Item {
         var key = History.keyFor("song", artist, album, title);
         if (key !== root.mprisPendingKey) {
             root.mprisPendingKey = key;
+            root.resolveMprisPath(key, artist, album, title);
             return ;
         }
         var now = Date.now();
@@ -863,6 +886,25 @@ Item {
 
     }
 
+    // Backfills the file path for a confirmed MPRIS track (keyed exactly,
+    // so a late result for a skipped track cannot corrupt the new one).
+    Process {
+        id: mprisPathProc
+
+        property string lookupKey: ""
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                if (History.setPath(mprisPathProc.lookupKey, String(text || ""))) {
+                    historyFile.setText(History.serialize());
+                    rebuildDisplay();
+                }
+            }
+        }
+
+    }
+
     Process {
         id: cliampResolveProc
 
@@ -901,7 +943,10 @@ Item {
                 return ;
 
             var h = dispatchProc.hist;
-            History.recordPlay(h.type, h.artist, h.album, h.title, h.display, h.path || "");
+            History.recordPlay(h.type, h.artist, h.album, h.title, h.display, h.path || "", {
+                "coverArt": h.coverArt || "",
+                "subId": h.subId || ""
+            });
             historyFile.setText(History.serialize());
             rebuildDisplay();
         }

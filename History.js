@@ -50,18 +50,38 @@ function rowKey(row) {
     }
 }
 
-function recordPlay(type, artist, album, title, display, path) {
+// Strip a redundant "Artist - " title prefix (players reporting
+// filename-style titles); leaves unrelated "Song - Remix" titles alone.
+function stripArtistPrefix(artist, title) {
+    var prefix = String(artist || "") + " - "
+    if (artist && String(title || "").indexOf(prefix) === 0)
+        return String(title).substring(prefix.length)
+    return title
+}
+
+function setPath(key, path) {
+    var it = items[key]
+    if (!it || !path)
+        return false
+    path = String(path).split("\n")[0].trim()
+    if (path.length === 0 || it.path === path)
+        return false
+    it.path = path
+    return true
+}
+
+function recordPlay(type, artist, album, title, display, path, extra) {
     // Players sometimes report filename-style "Artist - Title" in the
     // title field; strip the redundant prefix so plays merge under the
     // clean key instead of spawning a parallel record. Only strips when
     // the prefix names this record's own artist -- "Song - Remix" by
     // someone else is untouched.
     if (type === "song" && artist && title) {
-        var prefix = String(artist) + " - "
-        if (String(title).indexOf(prefix) === 0) {
-            title = String(title).substring(prefix.length)
-            if (display !== undefined && display !== null && String(display).indexOf(prefix) === 0)
-                display = String(display).substring(prefix.length)
+        var stripped = stripArtistPrefix(artist, title)
+        if (stripped !== title) {
+            title = stripped
+            if (display !== undefined && display !== null && String(display).indexOf(String(artist) + " - ") === 0)
+                display = String(display).substring(String(artist).length + 3)
         }
     }
     var key = keyFor(type, artist, album, title)
@@ -80,7 +100,17 @@ function recordPlay(type, artist, album, title, display, path) {
             "lastPlayed": now,
             "path": path || ""
         }
+        if (extra && extra.coverArt)
+            it.coverArt = extra.coverArt
+        if (extra && extra.subId)
+            it.subId = extra.subId
         items[key] = it
+    }
+    if (extra && (extra.coverArt || extra.subId)) {
+        if (extra.coverArt)
+            it.coverArt = extra.coverArt
+        if (extra.subId)
+            it.subId = extra.subId
     }
     it.playCount = (it.playCount || 0) + 1
     it.lastPlayed = now
@@ -153,7 +183,7 @@ function favoriteRow(it) {
         "temp": "temp"
     }
     var kind = kindMap[it.type] || "artist"
-    return {
+    var row = {
         "kind": kind,
         "badge": "",
         "title": it.display || it.title || it.album || it.artist,
@@ -165,6 +195,17 @@ function favoriteRow(it) {
         "path": it.path || "",
         "year": it.type === "year" ? parseInt(it.title, 10) || 0 : undefined
     }
+    // History flattens subsonic plays to local types; restore the origin so
+    // artwork (and dispatch) treat them as subsonic rows again.
+    if ((kind === "song" || kind === "album" || kind === "artist") && (it.coverArt || it.subId)) {
+        row.kind = "subsonic-" + kind
+        row.coverArt = it.coverArt || ""
+        row.id = it.subId || ""
+    }
+    // Album art resolves from a sample track file of that album.
+    if (kind === "album")
+        row.albumPath = it.path || ""
+    return row
 }
 
 // Empty query: top 12 favorites, 6 most recent (deduped), then a

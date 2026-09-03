@@ -6,6 +6,18 @@ function escapeLike(q) {
   return String(q).replace(/[\\%_]/g, function (c) { return "\\" + c })
 }
 
+// Shell-safe single-quoted SQL literal (value quotes doubled).
+function sqlQuote(s) {
+  return "'" + String(s || "").replace(/'/g, "''") + "'"
+}
+
+// Resolve a file path for player-reported metadata (MPRIS has no path of
+// its own). Matches the app's artist coalescing; beets/lidarr tags trusted.
+function trackPathSql(artist, album, title) {
+  return "SELECT path FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
+    " COLLATE NOCASE AND album = " + sqlQuote(album) + " COLLATE NOCASE AND title = " + sqlQuote(title) + " COLLATE NOCASE LIMIT 1"
+}
+
 // FTS5 MATCH expression from raw user input: each whitespace token becomes a
 // quoted prefix term. Quotes stripped; empty input → "" (caller skips SQL).
 function ftsQuery(q) {
