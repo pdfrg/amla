@@ -62,7 +62,7 @@ Item {
         var list = mprisPlayers;
         for (var i = 0; i < list.length; i++) {
             var p = list[i];
-            if (!p || p.playbackState !== Mpris.PlaybackState.Playing)
+            if (!p || p.playbackState !== MprisPlaybackState.Playing)
                 continue;
 
             if (best === null)
@@ -82,7 +82,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.4.0-catalog"
+    readonly property string buildId: "0.5.0002"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -103,7 +103,8 @@ Item {
     function toggleTargetPlayer() {
         root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
         pluginConfigFile.setText(Config.serializePluginConfig({
-            "targetPlayer": root.targetPlayer
+            "targetPlayer": root.targetPlayer,
+            "mustBin": root.pluginMustBin
         }));
     }
 
@@ -349,34 +350,111 @@ Item {
             subRandomProc.running = true;
             return ;
         }
-        if (target === "cliamp" && row && row.kind.indexOf("subsonic-") === 0) {
-            if (row.kind === "subsonic-album" && action !== "play") {
-                // provider-album queue unsupported — expand via getAlbum.
-                dispatchSubsonicCliamp(row, action);
-                return ;
-            }
-            var uri = subsonicCliampUri(row, action);
-            if (uri.length > 0) {
-                dispatchProc.script = Dispatch.build(action, row, target, {
-                    "uri": uri
-                });
-                dispatchProc.hist = historyFor(row);
-                dispatchProc.command = ["sh", "-c", dispatchProc.script];
-                dispatchProc.running = true;
-                return ;
-            }
+        if (target === "cliamp" && action === "random-album") {
+            randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\""];
+            randomAlbumProc.running = true;
+            return ;
         }
         if (target === "cliamp" && row) {
-            if (row.kind === "song" || row.kind === "playlist") {
-                ctx.files = [row.path];
-            } else if (row.kind === "temp") {
-                ctx.expandDir = row.path;
-            } else if (row.kind === "album") {
-                ctx.expandDir = row.albumPath || "";
-                if (!ctx.expandDir)
-                    ctx.files = [];
-
+            if (row.kind.indexOf("subsonic-") === 0) {
+                // cliamp v2 has a native navidrome provider, but the launcher
+                // owns the REST queries — route everything through stream
+                // URLs (song direct; album/artist via REST procs → m3u →
+                // url.load).
+                if (row.kind !== "subsonic-song") {
+                    dispatchSubsonicCliamp(row, action);
+                    return ;
+                }
+                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                var su = Subsonic.streamUrl(root.sub.url, auth, row.id);
+                runCliamp(row, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": su,
+                        "play": action === "play"
+                    },
+                    "launchTarget": su
+                });
+                return ;
             }
+            if (row.kind === "song") {
+                var tr = {
+                    "path": row.path,
+                    "title": row.titleField || row.title,
+                    "artist": row.artist || "",
+                    "album": row.album || ""
+                };
+                if (action === "play")
+                    runCliamp(row, action, {
+                    "op": "track.play",
+                    "params": {
+                        "track": tr
+                    },
+                    "launchTarget": row.path
+                });
+                else if (action === "enqueue-next")
+                    runCliamp(row, action, {
+                    "op": "track.queue",
+                    "params": {
+                        "track": tr
+                    }
+                });
+                else
+                    runCliamp(row, action, {
+                    "op": "queue",
+                    "params": {
+                        "path": row.path
+                    }
+                });
+                return ;
+            }
+            if (row.kind === "playlist") {
+                // url.load resolves the m3u (relative paths from its dir).
+                runCliamp(row, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": row.path,
+                        "play": action === "play"
+                    },
+                    "launchTarget": row.path
+                });
+                return ;
+            }
+            if (row.kind === "temp") {
+                runCliamp(row, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": row.path,
+                        "play": action === "play"
+                    },
+                    "launchTarget": row.path
+                });
+                return ;
+            }
+            if (row.kind === "album" && row.albumPath) {
+                runCliamp(row, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": row.albumPath,
+                        "play": action === "play"
+                    },
+                    "launchTarget": row.albumPath
+                });
+                return ;
+            }
+            if (row.kind === "artist" || row.kind === "genre" || row.kind === "year") {
+                // cliamp has no library search — resolve an m3u body via must's DB.
+                pendingSubAction = action;
+                pendingSubRow = row;
+                cliampResolveProc.environment = {
+                    "AMLA_DB": root.mustDb,
+                    "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row)
+                };
+                cliampResolveProc.command = ["sh", "-c", "mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.running = true;
+                return ;
+            }
+            return ;
         }
         dispatchProc.script = Dispatch.build(action, row, target, ctx);
         dispatchProc.hist = historyFor(row);
@@ -384,29 +462,32 @@ Item {
         dispatchProc.running = true;
     }
 
-    // cliamp URI per subsonic row (play; queue for enqueues).
-    function subsonicCliampUri(row, action) {
-        var verb = action === "play" ? "play" : "queue";
-        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-        if (row.kind === "subsonic-song")
-            return "cliamp://" + verb + "?url=" + encodeURIComponent(Subsonic.streamUrl(root.sub.url, auth, row.id));
-
-        if (row.kind === "subsonic-album")
-            return "cliamp://play?provider=navidrome&album=" + encodeURIComponent(row.id);
-
-        if (row.kind === "subsonic-artist")
-            return "cliamp://" + verb + "?provider=navidrome&q=" + encodeURIComponent(row.title);
-
-        return "";
+    // Generic cliamp v2 dispatch: one remote call; op name and params JSON
+    // passed via env (nothing is shell-quoted). m3uBody (optional) is written
+    // to $XDG_RUNTIME_DIR/amla/queue.m3u before the call.
+    function runCliamp(row, action, ctx) {
+        dispatchProc.hist = historyFor(row);
+        dispatchProc.script = Dispatch.build(action, row, "cliamp", ctx);
+        dispatchProc.environment = {
+            "AMLA_OP": String(ctx.op || ""),
+            "AMLA_PARAMS": JSON.stringify(ctx.params || {
+            }),
+            "AMLA_M3U": String(ctx.m3uBody || "")
+        };
+        dispatchProc.command = ["sh", "-c", dispatchProc.script];
+        dispatchProc.running = true;
     }
 
-    // cliamp + subsonic album enqueue: getAlbum → per-track stream URIs.
+    // cliamp + subsonic album/artist: REST → track list → stream URLs.
     function dispatchSubsonicCliamp(row, action) {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         pendingSubAction = action;
         pendingSubRow = row;
-        subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
-        subAlbumProc.running = true;
+        if (row.kind === "subsonic-artist")
+            subArtistProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "search3", auth + "&query=" + encodeURIComponent(row.title) + "&artistCount=1&albumCount=0&songCount=30")];
+        else
+            subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
+        (row.kind === "subsonic-artist" ? subArtistProc : subAlbumProc).running = true;
     }
 
     function refreshListings() {
@@ -480,6 +561,43 @@ Item {
     onFilterTextChanged: searchDebounce.restart()
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
+
+    Process {
+        id: randomAlbumProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var rows = [];
+                try {
+                    rows = JSON.parse(String(text || "[]"));
+                } catch (e) {
+                    return ;
+                }
+                if (!rows.length || !rows[0].path)
+                    return ;
+
+                var dir = Catalog.parentDir(String(rows[0].path));
+                if (!dir || dir.length === 0)
+                    return ;
+
+                var pseudoRow = {
+                    "kind": "temp",
+                    "title": Catalog.basename(dir),
+                    "path": dir
+                };
+                root.runCliamp(pseudoRow, "play", {
+                    "op": "url.load",
+                    "params": {
+                        "path": dir,
+                        "play": true
+                    },
+                    "launchTarget": dir
+                });
+            }
+        }
+
+    }
 
     // Session-start pre-warm (plan step 10): keepLoaded mounts the plugin at
     // shell start; ~10 s later refresh listings/facets and the empty-screen
@@ -638,15 +756,7 @@ Item {
                     "artist": alb.artist || "",
                     "title": alb.name || ""
                 };
-                var uri = root.subsonicCliampUri(pseudoRow, "play");
-                if (uri.length > 0) {
-                    root.dispatchProc.script = Dispatch.build("play", pseudoRow, "cliamp", {
-                        "uri": uri
-                    });
-                    root.dispatchProc.hist = null;
-                    root.dispatchProc.command = ["sh", "-c", root.dispatchProc.script];
-                    root.dispatchProc.running = true;
-                }
+                root.dispatchSubsonicCliamp(pseudoRow, "play");
             }
         }
 
@@ -663,18 +773,83 @@ Item {
                 if (tracks.length === 0)
                     return ;
 
-                var uris = [];
+                var urls = [];
+                var body = "#EXTM3U\n";
                 for (var i = 0; i < tracks.length; i++) {
                     var t = tracks[i];
                     var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                    uris.push("cliamp://queue?url=" + encodeURIComponent(Subsonic.streamUrl(root.sub.url, auth, t.id)));
+                    var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
+                    urls.push(u);
+                    body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
                 }
-                root.dispatchProc.script = Dispatch.build(root.pendingSubAction || "enqueue", root.pendingSubRow, "cliamp", {
-                    "uriLines": uris
+                root.runCliamp(root.pendingSubRow, root.pendingSubAction || "enqueue", {
+                    "op": "url.load",
+                    "params": {
+                        "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
+                        "play": (root.pendingSubAction || "enqueue") === "play"
+                    },
+                    "m3uBody": body,
+                    "launchTarget": urls[0]
                 });
-                root.dispatchProc.hist = historyFor(root.pendingSubRow);
-                root.dispatchProc.command = ["sh", "-c", root.dispatchProc.script];
-                root.dispatchProc.running = true;
+            }
+        }
+
+    }
+
+    Process {
+        id: subArtistProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var songs = (sub && sub.searchResult3 && sub.searchResult3.song) || [];
+                if (songs.length === 0)
+                    return ;
+
+                var urls = [];
+                var body = "#EXTM3U\n";
+                for (var i = 0; i < songs.length; i++) {
+                    var t = songs[i];
+                    var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
+                    urls.push(u);
+                    body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
+                }
+                root.runCliamp(root.pendingSubRow, root.pendingSubAction || "play", {
+                    "op": "url.load",
+                    "params": {
+                        "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
+                        "play": (root.pendingSubAction || "play") === "play"
+                    },
+                    "m3uBody": body,
+                    "launchTarget": urls[0]
+                });
+            }
+        }
+
+    }
+
+    Process {
+        id: cliampResolveProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var n = parseInt(String(text).trim() || "0");
+                if (n <= 0)
+                    return ;
+
+                var action = root.pendingSubAction || "play";
+                var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+                root.runCliamp(root.pendingSubRow, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": m3u,
+                        "play": action === "play"
+                    },
+                    "launchTarget": m3u
+                });
             }
         }
 

@@ -6,9 +6,13 @@
 // subsonic:<q>, artist:<q>, album:<q>, genre:<q>, year:<y|from-to>, free text.
 // must play / playshuffle auto-start the TUI when not running; enqueue does
 // not (degrades to launch + notification per plan).
-// cliamp v1.63.2 (pinned empirically): no remote subcommand; verbs load
-// "Playlist", queue </path/file>, play/pause/next/status; socket at
-// ~/.config/cliamp/cliamp.sock.
+// cliamp v2.0.1 (docs + pinned empirically): V2 IPC via `cliamp remote call
+// <op> --params <json> --wait` against ~/.config/cliamp/cliamp.sock.
+// url.load resolves a directory (recursive scan, embedded tags), an .m3u
+// (relative paths resolved from the file), or a single URL; "play": true
+// starts the appended material. track.play plays a supplied track,
+// track.queue queues one next, queue appends one path. Op names and params
+// are passed through env (AMLA_OP/AMLA_PARAMS/AMLA_M3U) — no shell quoting.
 
 function shq(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
@@ -115,61 +119,23 @@ function build(action, row, target, ctx) {
             notify("must not running — started it; try again once it's up") +
             "\n  " + launchVerb("") + "\n  exit 1\nfi"
     }
-    // ----- cliamp target -----
-    // Empirically pinned on v1.63.2: `queue <file>` appends local files
-    // (silent on success); `load <name>` only takes saved playlist names;
-    // `cliamp open 'cliamp://play?provider=navidrome&album=<id>'` plays
-    // provider content natively; local play = playlist create + load + play.
+
+    // ----- cliamp target (v2 IPC) -----
+    // The QML side sets AMLA_OP, AMLA_PARAMS (JSON) and, for multi-item m3u
+    // dispatches, AMLA_M3U (m3u body written to $XDG_RUNTIME_DIR/amla/queue.m3u
+    // before the call). ctx.launchTarget is the path/URL handed to a fresh TUI
+    // when cliamp is not running (play actions only).
     var RUNNING = cliampRunningExpr()
     var LAUNCH = "omarchy-launch-tui cliamp"
-
-    if (action === "random-album") {
-        // Random local album dir straight out of must's library DB, played
-        // through the playlist route (or launch args when not running).
-        return "DB=\"$HOME/.cache/must/library.db\"\nRD=$(sqlite3 -readonly \"$DB\" \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\" 2>/dev/null)\nRD=$(dirname \"$RD\" 2>/dev/null)\nif [ -z \"$RD\" ] || [ ! -d \"$RD\" ]; then\n  " +
-            notify("no local albums found for random") + "\n  exit 1\nfi\nif " + RUNNING + "; then\n  cliamp playlist delete amla-play >/dev/null 2>&1\n  cliamp playlist create amla-play \"$RD\" >/dev/null && cliamp load amla-play >/dev/null && cliamp play >/dev/null\nelse\n  " + LAUNCH + " \"$RD\" --auto-play >/dev/null 2>&1 &\nfi"
-    }
-
-    // Local rows: QML passes files=[...] for songs/playlists, expandDir for
-    // albums/temp. Subsonic rows arrive as cliamp URIs instead.
-    var files = ctx.files || []
-    if (files.length === 0 && ctx.expandDir)
-        files = ["__DIR__" + ctx.expandDir]
-
-    if (files.length === 1) {
-        var f = files[0]
-        var isDir = f.indexOf("__DIR__") === 0
-        var target = isDir ? f.slice(7) : f
-        if (action === "play") {
-            var playRoute = "cliamp playlist delete amla-play >/dev/null 2>&1\n  cliamp playlist create amla-play " + shq(target) + " >/dev/null && cliamp load amla-play >/dev/null && cliamp play >/dev/null"
-            var playLaunch = isDir ? LAUNCH + " " + shq(target) + " --auto-play >/dev/null 2>&1 &" : LAUNCH + " " + shq(target) + " --auto-play >/dev/null 2>&1 &"
-            return "if " + RUNNING + "; then\n  " + playRoute + "\nelse\n  " + playLaunch + "\nfi"
-        }
-        // enqueue / enqueue-next: queue appends (no insert-next in cliamp CLI).
-        return "if " + RUNNING + "; then\n  cliamp queue " + shq(target) + "\nelse\n  " +
-            notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1\nfi"
-    }
-    if (files.length > 1) {
-        var body = ""
-        for (var i = 0; i < files.length; i++)
-            body += "cliamp queue " + shq(files[i]) + "\n"
-        return "if " + RUNNING + "; then\n" + body + "else\n  " +
-            notify("cliamp not running — enqueue needs a running player") + "\n  exit 1\nfi"
-    }
-    if (ctx.uri) {
-        var openCmd = "cliamp open " + shq(ctx.uri)
-        if (action === "play") {
-            return "if " + RUNNING + "; then\n  " + openCmd + "\nelse\n  " + LAUNCH + " open " + shq(ctx.uri) + " >/dev/null 2>&1 &\nfi"
-        }
-        return "if " + RUNNING + "; then\n  " + openCmd + "\nelse\n  " +
-            notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1\nfi"
-    }
-    if (ctx.uriLines && ctx.uriLines.length > 0) {
-        var ub = ""
-        for (var j = 0; j < ctx.uriLines.length; j++)
-            ub += "cliamp open " + shq(ctx.uriLines[j]) + "\n"
-        return "if " + RUNNING + "; then\n" + ub + "else\n  " +
-            notify("cliamp not running — enqueue needs a running player") + "\n  exit 1\nfi"
-    }
-    return "exit 1"
+    var RUNTIME_DIR = "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    var runOp = "cliamp remote call \"$AMLA_OP\" --params \"$AMLA_PARAMS\" --wait >/dev/null 2>&1"
+    var prep = ""
+    if (ctx.m3uBody)
+        prep = "mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
+    var launch
+    if (action === "play")
+        launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play >/dev/null 2>&1 &"
+    else
+        launch = "  " + notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
+    return "if " + RUNNING + "; then\n  " + prep + runOp + "\nelse\n" + launch + "\nfi"
 }

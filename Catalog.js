@@ -43,6 +43,21 @@ function localSearchSql(q) {
     ");"
 }
 
+// Track list for a facet row (cliamp target has no library search): RAW SQL
+// emitting a ready m3u body ("#EXTINF:-1,Artist - Title" + path per track).
+// Passed to sqlite3 via env (no shell quoting); value quotes doubled SQL-side.
+function pathsForKindM3uSql(kind, row) {
+    var v = String(row.title || "").replace(/'/g, "''")
+    var inf = "'#EXTINF:-1,' || COALESCE(NULLIF(album_artist,''), artist) || ' - ' || title || char(10) || path"
+    if (kind === "artist")
+        return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
+    if (kind === "genre")
+        return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
+    if (kind === "year")
+        return "SELECT " + inf + " FROM tracks WHERE CAST(year AS TEXT) = '" + v + "' ORDER BY album, track_num"
+    return "SELECT path FROM tracks LIMIT 0"
+}
+
 // Facets: full genre + year lists, fetched once per popup open.
 function facetSql() {
   return "SELECT genre AS g, COUNT(*) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
