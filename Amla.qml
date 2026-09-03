@@ -1211,9 +1211,9 @@ Item {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "♪"
+                                    text: modelData.kind === "artist" ? "\uf007" : "♪"
                                     color: Color.muted
-                                    font.family: Style.font.menuFamily
+                                    font.family: modelData.kind === "artist" ? "JetBrainsMono Nerd Font" : Style.font.menuFamily
                                     font.pixelSize: Style.font.icon
                                     visible: root.artFor(modelData) === ""
                                 }

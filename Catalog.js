@@ -371,9 +371,9 @@ function parseArtOutput(outText) {
 }
 
 // Ordered artwork candidate dirs for a row (first hit wins in artFor).
-// Artist rows probe the artist dir first (nested /artist/album/ layouts
-// keep artist.jpg there), falling back to a representative album dir
-// (flat /artist - album/ layouts). Others use artDirFor directly.
+// Artist rows probe the artist dir only (nested /artist/album/ layouts
+// keep artist.jpg there); anything else falls back to a glyph — album
+// covers are never shown as artist images. Others use artDirFor directly.
 function artDirsFor(row) {
     if (!row)
         return []
@@ -383,12 +383,9 @@ function artDirsFor(row) {
             return []
         var albumDir = parentDir(d)
         var artistDir = parentDir(albumDir)
-        var out = []
         if (artistDir && artistDir !== albumDir)
-            out.push(artistDir)
-        if (albumDir)
-            out.push(albumDir)
-        return out
+            return [artistDir]
+        return []
     }
     var single = artDirFor(row)
     return single ? [single] : []
@@ -407,7 +404,11 @@ function artDirFor(row) {
     case "temp":
         return row.path || ""
     case "artist":
-        return (row.albumPath || row.path) ? parentDir(row.albumPath || row.path) : ""
+        if (!row.albumPath && !row.path)
+            return ""
+        var aDir = parentDir(row.albumPath || row.path)
+        var artistDir = parentDir(aDir)
+        return artistDir && artistDir !== aDir ? artistDir : ""
     default:
         return ""
     }
