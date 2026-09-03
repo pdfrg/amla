@@ -51,6 +51,19 @@ function rowKey(row) {
 }
 
 function recordPlay(type, artist, album, title, display, path) {
+    // Players sometimes report filename-style "Artist - Title" in the
+    // title field; strip the redundant prefix so plays merge under the
+    // clean key instead of spawning a parallel record. Only strips when
+    // the prefix names this record's own artist -- "Song - Remix" by
+    // someone else is untouched.
+    if (type === "song" && artist && title) {
+        var prefix = String(artist) + " - "
+        if (String(title).indexOf(prefix) === 0) {
+            title = String(title).substring(prefix.length)
+            if (display !== undefined && display !== null && String(display).indexOf(prefix) === 0)
+                display = String(display).substring(prefix.length)
+        }
+    }
     var key = keyFor(type, artist, album, title)
     if (key.length === 0)
         return false

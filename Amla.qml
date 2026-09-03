@@ -61,6 +61,10 @@ Item {
     // ----- play history (MPRIS watcher + dispatch recording) -----
     property string lastRecordedKey: ""
     property double lastRecordedMs: 0
+    // Stability gate: a key must survive two consecutive polls before it
+    // counts. Players update title/artist/album non-atomically on track
+    // change, and a 3 s poll can snapshot the mixed transitional state.
+    property string mprisPendingKey: ""
     readonly property var mprisPlayers: Mpris.players ? Mpris.players.values : []
     readonly property var mprisActive: {
         var best = null;
@@ -87,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0003"
+    readonly property string buildId: "0.5.0004"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -568,6 +572,10 @@ Item {
             return ;
 
         var key = History.keyFor("song", artist, album, title);
+        if (key !== root.mprisPendingKey) {
+            root.mprisPendingKey = key;
+            return ;
+        }
         var now = Date.now();
         if (key === root.lastRecordedKey && now - root.lastRecordedMs < 15000)
             return ;
