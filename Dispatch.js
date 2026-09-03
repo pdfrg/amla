@@ -129,6 +129,11 @@ function build(action, row, target, ctx) {
     var LAUNCH = "omarchy-launch-tui cliamp"
     var RUNTIME_DIR = "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     var runOp = "cliamp remote call \"$AMLA_OP\" --params \"$AMLA_PARAMS\" --wait >/dev/null 2>&1"
+    // Play replaces the live playlist (url.load / track.play only append),
+    // so clear first. Newline-chained: the load still runs if the clear
+    // errors (e.g. empty queue). Enqueue / enqueue-next append by design.
+    if (ctx.clearFirst)
+        runOp = "cliamp remote call \"queue.clear\" --params \"{}\" --wait >/dev/null 2>&1\n  " + runOp
     var prep = ""
     if (ctx.m3uBody)
         prep = "mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "

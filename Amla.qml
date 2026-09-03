@@ -373,6 +373,7 @@ Item {
                         "path": su,
                         "play": action === "play"
                     },
+                    "clearFirst": action === "play",
                     "launchTarget": su
                 });
                 return ;
@@ -390,6 +391,7 @@ Item {
                     "params": {
                         "track": tr
                     },
+                    "clearFirst": true,
                     "launchTarget": row.path
                 });
                 else if (action === "enqueue-next")
@@ -416,6 +418,7 @@ Item {
                         "path": row.path,
                         "play": action === "play"
                     },
+                    "clearFirst": action === "play",
                     "launchTarget": row.path
                 });
                 return ;
@@ -427,22 +430,12 @@ Item {
                         "path": row.path,
                         "play": action === "play"
                     },
+                    "clearFirst": action === "play",
                     "launchTarget": row.path
                 });
                 return ;
             }
-            if (row.kind === "album" && row.albumPath) {
-                runCliamp(row, action, {
-                    "op": "url.load",
-                    "params": {
-                        "path": row.albumPath,
-                        "play": action === "play"
-                    },
-                    "launchTarget": row.albumPath
-                });
-                return ;
-            }
-            if (row.kind === "artist" || row.kind === "genre" || row.kind === "year") {
+            if (row.kind === "album" || row.kind === "artist" || row.kind === "genre" || row.kind === "year") {
                 // cliamp has no library search — resolve an m3u body via must's DB.
                 pendingSubAction = action;
                 pendingSubRow = row;
@@ -592,6 +585,7 @@ Item {
                         "path": dir,
                         "play": true
                     },
+                    "clearFirst": true,
                     "launchTarget": dir
                 });
             }
@@ -788,6 +782,7 @@ Item {
                         "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
                         "play": (root.pendingSubAction || "enqueue") === "play"
                     },
+                    "clearFirst": (root.pendingSubAction || "enqueue") === "play",
                     "m3uBody": body,
                     "launchTarget": urls[0]
                 });
@@ -822,6 +817,7 @@ Item {
                         "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
                         "play": (root.pendingSubAction || "play") === "play"
                     },
+                    "clearFirst": (root.pendingSubAction || "play") === "play",
                     "m3uBody": body,
                     "launchTarget": urls[0]
                 });
@@ -848,6 +844,7 @@ Item {
                         "path": m3u,
                         "play": action === "play"
                     },
+                    "clearFirst": action === "play",
                     "launchTarget": m3u
                 });
             }

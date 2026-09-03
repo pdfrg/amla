@@ -51,6 +51,13 @@ function pathsForKindM3uSql(kind, row) {
     var inf = "'#EXTINF:-1,' || COALESCE(NULLIF(album_artist,''), artist) || ' - ' || title || char(10) || path"
     if (kind === "artist")
         return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
+    if (kind === "album") {
+        var a = String(row.artist || "").replace(/'/g, "''")
+        var where = "album = '" + v + "' COLLATE NOCASE"
+        if (a.length > 0)
+            where += " AND COALESCE(NULLIF(album_artist,''), artist) = '" + a + "' COLLATE NOCASE"
+        return "SELECT " + inf + " FROM tracks WHERE " + where + " ORDER BY track_num"
+    }
     if (kind === "genre")
         return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
     if (kind === "year")
