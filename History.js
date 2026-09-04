@@ -196,9 +196,11 @@ function favoriteRow(it) {
         "temp": "temp"
     }
     var kind = kindMap[it.type] || "artist"
-    var subtitle = kind + (it.album && kind === "song" ? " · " + it.album : "")
+    var subtitle = kind
     if (kind === "song")
         subtitle = songSubtitle(it.artist, it.album, "")
+    else if (kind === "album" && it.artist)
+        subtitle = it.artist + " · album"
     var row = {
         "kind": kind,
         "badge": "",
