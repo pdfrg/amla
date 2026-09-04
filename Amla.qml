@@ -91,8 +91,9 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0016"
+    readonly property string buildId: "0.5.0017"
     property string pendingSubAction: ""
+    property bool randomFallbackLocal: false
     property var pendingSubRow: null
 
     function open(_payloadJson) {
@@ -289,6 +290,18 @@ Item {
 
     }
 
+    // Uniform source pick for combined random (mirrors must's random).
+    function pickRandomSource() {
+        var cands = ["local"];
+        if (((root.listing && root.listing.temp) || []).length > 0)
+            cands.push("temp");
+
+        if (root.subEnabled)
+            cands.push("subsonic");
+
+        return cands[Math.floor(Math.random() * cands.length)];
+    }
+
     function playRandom(scope) {
         dispatch(null, scope && scope.length > 0 ? "random-album-" + scope : "random-album");
         root.cancel();
@@ -385,10 +398,15 @@ Item {
             "query": root.filterText
         };
         if (target === "cliamp" && String(action || "").indexOf("random-album") === 0) {
-            if ((action === "random-album" || action === "random-album-subsonic") && root.subEnabled) {
+            // Combined mirrors must's server-side `random`: a uniform pick
+            // among the available sources per invocation (not a fixed
+            // subsonic preference; temp joins the pool when listed).
+            var scope = action === "random-album" ? root.pickRandomSource() : action.substring("random-album-".length);
+            if (scope === "subsonic" && root.subEnabled) {
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                 pendingSubAction = "play";
                 pendingSubRow = null;
+                root.randomFallbackLocal = action === "random-album";
                 subRandomProc.command = ["curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
                 subRandomProc.running = true;
                 root.cancel();
@@ -951,9 +969,18 @@ Item {
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
                 var alb = (sub && sub.albumList2 && sub.albumList2.album && sub.albumList2.album[0]) || null;
-                if (!alb)
+                if (!alb) {
+                    // Combined pick hit an unreachable server: degrade to
+                    // local (mirrors must trying the next source). Scoped
+                    // subsonic requests stay silent — nothing else applies.
+                    if (root.randomFallbackLocal) {
+                        root.randomFallbackLocal = false;
+                        randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\""];
+                        randomAlbumProc.running = true;
+                    }
                     return ;
-
+                }
+                root.randomFallbackLocal = false;
                 var pseudoRow = {
                     "kind": "subsonic-album",
                     "id": alb.id || "",
