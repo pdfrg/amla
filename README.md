@@ -24,6 +24,8 @@ Favorites learn from your play history and surface as you type. Dispatches to
   playshuffle, scoped random, rescan — because the two were developed
   together. Set it as your target with `Ctrl+T` inside the popup.
 
+![amla+must](amla-must.jpg)
+
 A Subsonic/Navidrome server is optional — configure it in must and amla
 searches it too; without it amla is local-only and never touches the network.
 
