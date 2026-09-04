@@ -19,6 +19,7 @@ as a pure QML plugin for the Omarchy 4 shell. Plan: `PLAN.md`.
 | `Alt+Enter` | playshuffle current query |
 | `Shift+Alt+Enter` | enqueue a random result |
 | `Alt+R` | play random album (local · temp · subsonic) |
+| `Alt+1` / `Alt+2` / `Alt+3` | play random local / subsonic / temp album |
 | `Ctrl+R` | rescan + refresh facets + flush art cache |
 | `Ctrl+T` | toggle target player (persists) |
 | `Esc` | clear query / close |
@@ -38,3 +39,6 @@ The repo is the source of truth; `scripts/install.sh` rsyncs it into
 - Plugin config: `~/.config/amla/config.json` (target player, must binary
   override)
 - must's library DB is read-only: `~/.cache/must/library.db` (FTS5)
+- Requires must ≥ 0.2.3 for subsonic track (`songid`/`albumid`) and
+  subsonic genre/year dispatch; older must still plays local catalog,
+  subsonic artists/albums, and everything cliamp-side
