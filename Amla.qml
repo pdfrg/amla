@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0014"
+    readonly property string buildId: "0.5.0016"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -506,7 +506,7 @@ Item {
                 });
                 return ;
             }
-            if (row.kind === "album" || row.kind === "artist" || row.kind === "genre" || row.kind === "year") {
+            if (row.kind === "album" || row.kind === "artist" || row.kind === "genre" || row.kind === "year" || row.kind === "decade") {
                 // cliamp has no library search — resolve an m3u body via must's DB.
                 pendingSubAction = action;
                 pendingSubRow = row;
@@ -542,16 +542,64 @@ Item {
         dispatchProc.running = true;
     }
 
+    // Track children → stream-URL m3u dispatch (shared by all subsonic →
+    // cliamp multi-track completions). fallbackAction preserves each
+    // caller's historical default (album: enqueue, artist: play).
+    function subTracksToM3u(tracks) {
+        var urls = [];
+        var body = "#EXTM3U\n";
+        for (var i = 0; i < tracks.length; i++) {
+            var t = tracks[i];
+            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
+            urls.push(u);
+            body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
+        }
+        return {
+            "body": body,
+            "firstUrl": urls.length > 0 ? urls[0] : ""
+        };
+    }
+
+    function runSubM3u(tracks, fallbackAction) {
+        var m = root.subTracksToM3u(tracks);
+        if (m.firstUrl.length === 0)
+            return ;
+
+        var action = root.pendingSubAction || fallbackAction;
+        root.runCliamp(root.pendingSubRow, action, {
+            "op": "url.load",
+            "params": {
+                "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
+                "play": action === "play"
+            },
+            "clearFirst": action === "play",
+            "insertNext": action === "enqueue-next",
+            "m3uBody": m.body,
+            "launchTarget": m.firstUrl
+        });
+    }
+
     // cliamp + subsonic album/artist: REST → track list → stream URLs.
     function dispatchSubsonicCliamp(row, action) {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         pendingSubAction = action;
         pendingSubRow = row;
-        if (row.kind === "subsonic-artist")
+        if (row.kind === "subsonic-artist") {
             subArtistProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "search3", auth + "&query=" + encodeURIComponent(row.title) + "&artistCount=1&albumCount=0&songCount=30")];
-        else
+            subArtistProc.running = true;
+        } else if (row.kind === "subsonic-genre") {
+            subGenreProc.command = ["curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
+            subGenreProc.running = true;
+        } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
+            var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
+            var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
+            subYearListProc.command = ["curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
+            subYearListProc.running = true;
+        } else {
             subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
-        (row.kind === "subsonic-artist" ? subArtistProc : subAlbumProc).running = true;
+            subAlbumProc.running = true;
+        }
     }
 
     // One indexed lookup per new MPRIS track: backfill the file path the
@@ -926,30 +974,68 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
-                var tracks = (sub && sub.album && sub.album.song) || [];
-                if (tracks.length === 0)
+                root.runSubM3u(Subsonic.albumSongs(sub), "enqueue");
+            }
+        }
+
+    }
+
+    Process {
+        id: subGenreProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                root.runSubM3u(Subsonic.genreSongs(sub), "enqueue");
+            }
+        }
+
+    }
+
+    // Year/decade expansion is two hops: album list first, then one getAlbum
+    // per album (capped: a decade can span hundreds). Parts split on
+    // ---AMLAYEAR--- and parse independently so one bad album skips cleanly.
+    Process {
+        id: subYearListProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var albums = Subsonic.yearAlbums(sub).slice(0, 40);
+                if (albums.length === 0)
                     return ;
 
-                var urls = [];
-                var body = "#EXTM3U\n";
-                for (var i = 0; i < tracks.length; i++) {
-                    var t = tracks[i];
-                    var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                    var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
-                    urls.push(u);
-                    body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
+                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                var parts = [];
+                for (var i = 0; i < albums.length; i++) parts.push("curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, albums[i].id) + "'; echo ---AMLAYEAR---")
+                subYearExpandProc.command = ["sh", "-c", parts.join(" ")];
+                subYearExpandProc.running = true;
+            }
+        }
+
+    }
+
+    Process {
+        id: subYearExpandProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var tracks = [];
+                var chunks = String(text || "").split("---AMLAYEAR---");
+                for (var i = 0; i < chunks.length; i++) {
+                    var sub = null;
+                    try {
+                        sub = Subsonic.getSubsonic(chunks[i]);
+                    } catch (e) {
+                        sub = null;
+                    }
+                    var songs = Subsonic.albumSongs(sub);
+                    for (var j = 0; j < songs.length; j++) tracks.push(songs[j])
                 }
-                root.runCliamp(root.pendingSubRow, root.pendingSubAction || "enqueue", {
-                    "op": "url.load",
-                    "params": {
-                        "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
-                        "play": (root.pendingSubAction || "enqueue") === "play"
-                    },
-                    "clearFirst": (root.pendingSubAction || "enqueue") === "play",
-                    "insertNext": (root.pendingSubAction || "enqueue") === "enqueue-next",
-                    "m3uBody": body,
-                    "launchTarget": urls[0]
-                });
+                root.runSubM3u(tracks, "enqueue");
             }
         }
 
@@ -963,29 +1049,7 @@ Item {
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
                 var songs = (sub && sub.searchResult3 && sub.searchResult3.song) || [];
-                if (songs.length === 0)
-                    return ;
-
-                var urls = [];
-                var body = "#EXTM3U\n";
-                for (var i = 0; i < songs.length; i++) {
-                    var t = songs[i];
-                    var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                    var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
-                    urls.push(u);
-                    body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
-                }
-                root.runCliamp(root.pendingSubRow, root.pendingSubAction || "play", {
-                    "op": "url.load",
-                    "params": {
-                        "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
-                        "play": (root.pendingSubAction || "play") === "play"
-                    },
-                    "clearFirst": (root.pendingSubAction || "play") === "play",
-                    "insertNext": (root.pendingSubAction || "play") === "enqueue-next",
-                    "m3uBody": body,
-                    "launchTarget": urls[0]
-                });
+                root.runSubM3u(songs, "play");
             }
         }
 

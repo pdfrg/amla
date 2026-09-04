@@ -108,6 +108,8 @@ function pathsForKindM3uSql(kind, row) {
         return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
     if (kind === "year")
         return "SELECT " + inf + " FROM tracks WHERE CAST(year AS TEXT) = '" + v + "' ORDER BY album, track_num"
+    if (kind === "decade")
+        return "SELECT " + inf + " FROM tracks WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " ORDER BY album, track_num"
     return "SELECT path FROM tracks LIMIT 0"
 }
 

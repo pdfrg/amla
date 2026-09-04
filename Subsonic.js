@@ -47,6 +47,41 @@ function byYearUrl(baseUrl, auth) {
         "&type=byYear&fromYear=0&toYear=9999&size=500")
 }
 
+function songsByGenreUrl(baseUrl, auth, genre) {
+    return apiUrl(baseUrl, "getSongsByGenre", auth +
+        "&genre=" + encodeURIComponent(String(genre || "")) + "&count=500")
+}
+
+function albumsByYearUrl(baseUrl, auth, fromYear, toYear) {
+    return apiUrl(baseUrl, "getAlbumList2", auth +
+        "&type=byYear&fromYear=" + (fromYear || 0) + "&toYear=" + (toYear || 9999) + "&size=500")
+}
+
+function albumTracksUrl(baseUrl, auth, albumId) {
+    return apiUrl(baseUrl, "getAlbum", auth + "&id=" + encodeURIComponent(String(albumId || "")))
+}
+
+// getSongsByGenre → song children for m3u building.
+function genreSongs(sub) {
+    if (!sub || !sub.songsByGenre || !sub.songsByGenre.song)
+        return []
+    return sub.songsByGenre.song
+}
+
+// getAlbumList2 → album entries for year expansion.
+function yearAlbums(sub) {
+    if (!sub || !sub.albumList2 || !sub.albumList2.album)
+        return []
+    return sub.albumList2.album
+}
+
+// getAlbum → song children for m3u building.
+function albumSongs(sub) {
+    if (!sub || !sub.album || !sub.album.song)
+        return []
+    return sub.album.song
+}
+
 function randomAlbumUrl(baseUrl, auth) {
     return apiUrl(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
 }
