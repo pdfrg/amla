@@ -111,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0421"
+    readonly property string buildId: "0.5.0422"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -140,7 +140,10 @@ Item {
         root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
         var pc = root.amlaPluginCfg || {
         };
-        pluginConfigFile.setText(Config.serializePluginConfig({
+        // Merge over a fresh disk read (see configSaveProc): in-memory
+        // amlaPluginCfg goes stale on external edits, and writing from it
+        // would silently drop keys added outside the shell.
+        configSaveProc.pending = Config.serializePluginConfig({
             "targetPlayer": root.targetPlayer,
             "mustBin": root.pluginMustBin,
             "musicDirs": pc.musicDirs || [],
@@ -150,7 +153,9 @@ Item {
             "mpdHost": pc.mpdHost || "",
             "mpdPort": pc.mpdPort || 0,
             "debugNoMust": pc.debugNoMust === true
-        }));
+        });
+        configSaveProc.command = ["/bin/cat", root.home + "/.config/amla/config.json"];
+        configSaveProc.running = true;
     }
 
     function close() {
@@ -1498,6 +1503,37 @@ Item {
                     root.requestSearch();
                 else
                     root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    // Config save merge: FileView watchChanges does not refire on external
+    // edits, so in-memory amlaPluginCfg may predate keys added outside the
+    // shell. Every save re-reads the file and overlays only the keys amla
+    // owns; anything else on disk (hand edits, future keys) survives.
+    // A missing/unreadable file degrades to writing the known keys.
+    Process {
+        id: configSaveProc
+
+        property string pending: ""
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var disk = {
+                };
+                try {
+                    disk = JSON.parse(String(text || ""));
+                } catch (e) {
+                }
+                var known = JSON.parse(configSaveProc.pending);
+                for (var k in disk) {
+                    if (!(k in known))
+                        known[k] = disk[k];
+
+                }
+                pluginConfigFile.setText(JSON.stringify(known, null, 2) + "\n");
             }
         }
 
