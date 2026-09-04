@@ -111,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0424"
+    readonly property string buildId: "0.5.0425"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -596,6 +596,10 @@ Item {
     function runCliamp(row, action, ctx) {
         // Alt+Enter playshuffle: same clear-first load as play, then the
         // script switches shuffle explicitly on (ctx.shuffleAfter).
+        // Plain play pins shuffle explicitly off (ctx.shuffleOffAfter):
+        // cliamp persists shuffle into config.toml, so without this a
+        // previous playshuffle would leak into the next play, even across
+        // restarts. Enqueue paths leave the running order untouched.
         if (action === "playshuffle") {
             action = "play";
             if (!ctx.params)
@@ -605,6 +609,8 @@ Item {
             ctx.params.play = true;
             ctx.clearFirst = true;
             ctx.shuffleAfter = true;
+        } else if (action === "play") {
+            ctx.shuffleOffAfter = true;
         }
         dispatchProc.hist = historyFor(row);
         dispatchProc.script = Dispatch.build(action, row, "cliamp", ctx);

@@ -173,6 +173,13 @@ function build(action, row, target, ctx) {
     // The load's own status (not shuffle's) is what history records.
     if (ctx.shuffleAfter)
         runOp += "\n  OP_STATUS=$?\n  cliamp remote call \"shuffle\" --params '{\"name\":\"on\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
+    // Plain play means in-order: cliamp persists shuffle to config.toml on
+    // every toggle, so a leftover shuffle=on would otherwise survive
+    // restarts and shuffle the next play. Idempotent (op only toggles when
+    // needed); load status still decides history. Enqueue paths never set
+    // this — they must not disturb the running order.
+    else if (ctx.shuffleOffAfter)
+        runOp += "\n  OP_STATUS=$?\n  cliamp remote call \"shuffle\" --params '{\"name\":\"off\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
     var prep = ""
     if (ctx.m3uBody)
         prep = "/usr/bin/mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
@@ -181,7 +188,9 @@ function build(action, row, target, ctx) {
     var guard = "if [ ! -x /usr/bin/cliamp ] && ! command -v cliamp >/dev/null 2>&1; then\n  " + notify("amla: cliamp not found — install it (check options with yay -Ss cliamp) or press Ctrl+T for must") + "\n  exit 1\nfi\nif ! /usr/bin/cliamp remote --help >/dev/null 2>&1 && ! cliamp remote --help >/dev/null 2>&1; then\n  " + notify("amla: cliamp v2+ required for playback — upgrade cliamp (check options with yay -Ss cliamp). Catalog still browsable; or press Ctrl+T for must") + "\n  exit 1\nfi\n"
     var launch
     if (action === "play" && String(ctx.launchTarget || "").length > 0)
-        launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play >/dev/null 2>&1 &"
+        // --no-shuffle: cold launch must not inherit persisted shuffle=on
+        // from config.toml (see shuffleOffAfter above for the running case).
+        launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play --no-shuffle >/dev/null 2>&1 &"
     else if (action === "play")
         // Native provider loads have no path/URL to hand a fresh TUI (e.g.
         // provider.load_album): start it bare and ask for a retry, mirroring
