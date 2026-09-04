@@ -16,6 +16,11 @@ Item {
     // must-style insert-next: append one path, Dispatch moves
     // it after the current track (track.queue is cliamp's
     // play-next stack with return-to-position semantics).
+    // cliamp-native track resolution (provider.album_tracks for an album id,
+    // provider.search for an artist name). Results carry cliamp-minted authed
+    // stream URLs with metadata + provider_meta, so they feed the standard
+    // url.load m3u dispatch with working enqueue-next id-matching. Genre /
+    // year still use the REST procs (no provider op covers them).
 
     id: root
 
@@ -91,7 +96,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0229"
+    readonly property string buildId: "0.5.0234"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -625,13 +630,45 @@ Item {
             });
             return ;
         }
+        if (row.kind === "subsonic-album" && row.id && String(row.id).length > 0) {
+            // Enqueue paths (play is provider.load_album above): resolve
+            // cliamp-minted track URLs natively — full metadata plus
+            // provider_meta, so enqueue-next id-matching works.
+            pendingSubAction = action;
+            pendingSubRow = row;
+            subCliampTracksProc.environment = {
+                "AMLA_POP": "provider.album_tracks",
+                "AMLA_PPARAMS": JSON.stringify({
+                    "provider": "navidrome",
+                    "album": row.id,
+                    "limit": 200
+                })
+            };
+            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.running = true;
+            return ;
+        }
+        if (row.kind === "subsonic-artist") {
+            // Same search semantics as the old REST path (song matches),
+            // but the URLs come from cliamp with provider identity attached.
+            pendingSubAction = action;
+            pendingSubRow = row;
+            subCliampTracksProc.environment = {
+                "AMLA_POP": "provider.search",
+                "AMLA_PPARAMS": JSON.stringify({
+                    "provider": "navidrome",
+                    "query": row.title,
+                    "limit": 100
+                })
+            };
+            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.running = true;
+            return ;
+        }
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         pendingSubAction = action;
         pendingSubRow = row;
-        if (row.kind === "subsonic-artist") {
-            subArtistProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "search3", auth + "&query=" + encodeURIComponent(row.title) + "&artistCount=1&albumCount=0&songCount=30")];
-            subArtistProc.running = true;
-        } else if (row.kind === "subsonic-genre") {
+        if (row.kind === "subsonic-genre") {
             subGenreProc.command = ["curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
             subGenreProc.running = true;
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
@@ -640,8 +677,19 @@ Item {
             subYearListProc.command = ["curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
             subYearListProc.running = true;
         } else {
-            subAlbumProc.command = ["curl", "-s", "--max-time", "5", Subsonic.apiUrl(root.sub.url, "getAlbum", auth + "&id=" + encodeURIComponent(row.id))];
-            subAlbumProc.running = true;
+            // Id-less album row (e.g. from history): provider.search over
+            // "artist album" resolves its tracks without REST.
+            var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
+            subCliampTracksProc.environment = {
+                "AMLA_POP": "provider.search",
+                "AMLA_PPARAMS": JSON.stringify({
+                    "provider": "navidrome",
+                    "query": q,
+                    "limit": 100
+                })
+            };
+            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.running = true;
         }
     }
 
@@ -1022,19 +1070,6 @@ Item {
     }
 
     Process {
-        id: subAlbumProc
-
-        stdout: StdioCollector {
-            waitForEnd: true
-            onStreamFinished: {
-                var sub = Subsonic.getSubsonic(String(text || ""));
-                root.runSubM3u(Subsonic.albumSongs(sub), "enqueue");
-            }
-        }
-
-    }
-
-    Process {
         id: subGenreProc
 
         stdout: StdioCollector {
@@ -1096,14 +1131,41 @@ Item {
     }
 
     Process {
-        id: subArtistProc
+        id: subCliampTracksProc
 
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
-                var sub = Subsonic.getSubsonic(String(text || ""));
-                var songs = (sub && sub.searchResult3 && sub.searchResult3.song) || [];
-                root.runSubM3u(songs, "play");
+                var tracks = [];
+                try {
+                    var d = JSON.parse(String(text || ""));
+                    var list = (d && d.job && d.job.result && d.job.result.tracks) || [];
+                    for (var i = 0; i < list.length; i++) {
+                        if (list[i] && list[i].path)
+                            tracks.push(list[i]);
+
+                    }
+                } catch (e) {
+                    return ;
+                }
+                if (tracks.length === 0)
+                    return ;
+
+                var action = root.pendingSubAction || "enqueue";
+                var body = "#EXTM3U\n";
+                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:-1," + (tracks[j].artist || "") + " - " + (tracks[j].title || "") + "\n" + tracks[j].path + "\n"
+                var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+                root.runCliamp(root.pendingSubRow, action, {
+                    "op": "url.load",
+                    "params": {
+                        "path": m3u,
+                        "play": action === "play"
+                    },
+                    "clearFirst": action === "play",
+                    "insertNext": action === "enqueue-next",
+                    "m3uBody": body,
+                    "launchTarget": tracks[0].path
+                });
             }
         }
 
