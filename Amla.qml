@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0013"
+    readonly property string buildId: "0.5.0014"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 

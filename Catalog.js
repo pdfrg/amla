@@ -254,16 +254,27 @@ function facetRows(genres, years, q) {
         year: y
       })
   }
+  // Exact match first, then prefix, then substring: a query of "rock"
+  // surfaces "Rock" above "Prog Rock" (previously source order only).
+  var exact = []
+  var prefix = []
+  var sub = []
   for (var j = 0; j < genres.length; j++) {
-    if (String(genres[j].g).toLowerCase().indexOf(query) >= 0)
-      rows.push({
-        kind: "genre",
-        badge: "",
-        title: String(genres[j].g),
-        subtitle: "genre · " + genres[j].n + " track" + (genres[j].n === 1 ? "" : "s")
-      })
+    var gl = String(genres[j].g).toLowerCase()
+    var grow = {
+      kind: "genre",
+      badge: "",
+      title: String(genres[j].g),
+      subtitle: "genre · " + genres[j].n + " track" + (genres[j].n === 1 ? "" : "s")
+    }
+    if (gl === query)
+      exact.push(grow)
+    else if (gl.indexOf(query) === 0)
+      prefix.push(grow)
+    else if (gl.indexOf(query) >= 0)
+      sub.push(grow)
   }
-  return rows
+  return rows.concat(exact, prefix, sub)
 }
 
 // Local DB rows (tier,a1..a6) + listing caches → uniform result rows.
