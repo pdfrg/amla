@@ -1,0 +1,9 @@
+# human written text notes
+*.txt
+# dev-only docs and tooling — never published to the marketplace repo.
+# (Kept on disk locally; untracked. History purged with filter-branch.)
+AGENTS.md
+PLAN.md
+PROGRESS.md
+project-outline.txt
+scripts/install.sh
