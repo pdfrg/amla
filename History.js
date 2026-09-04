@@ -36,12 +36,16 @@ function rowKey(row) {
         return keyFor("album", row.artist, row.album)
     case "artist":
     case "genre":
+    case "subsonic-genre":
     case "playlist":
     case "temp":
     case "subsonic-artist":
     case "subsonic-album":
         return keyFor(row.kind, "", "", row.title)
     case "year":
+    case "decade":
+    case "subsonic-year":
+    case "subsonic-decade":
         return keyFor("year", "", "", row.title)
     case "subsonic-song":
         return keyFor("song", row.artist, row.album, row.titleField)

@@ -52,12 +52,16 @@ function mustResolver(row) {
     case "temp":
         return shq(row.path || row.title || "")
     case "subsonic-song":
+        if (row.id && String(row.id).length > 0)
+            return "subsonic:songid:" + shq(row.id)
         if (row.path && row.path.length > 0)
             return shq(row.path)
         return "subsonic:song:" + shq(row.titleField || row.title)
     case "album":
         return "album:" + shq(row.album || row.title)
     case "subsonic-album":
+        if (row.id && String(row.id).length > 0)
+            return "subsonic:albumid:" + shq(row.id)
         return "subsonic:album:" + shq(row.album || row.title)
     case "artist":
         return "artist:" + shq(row.title)
@@ -65,10 +69,16 @@ function mustResolver(row) {
         return "subsonic:artist:" + shq(row.title)
     case "genre":
         return "genre:" + shq(row.title)
+    case "subsonic-genre":
+        return "subsonic:genre:" + shq(row.title)
     case "year":
         return "year:" + shq(row.title)
+    case "subsonic-year":
+        return "subsonic:year:" + shq(row.title)
     case "decade":
         return "year:" + row.decade + "-" + (row.decade + 9)
+    case "subsonic-decade":
+        return "subsonic:year:" + row.decade + "-" + (row.decade + 9)
     default:
         return ""
     }

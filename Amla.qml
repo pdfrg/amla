@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0012"
+    readonly property string buildId: "0.5.0013"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -336,6 +336,7 @@ Item {
                 "subId": row.id || ""
             };
         case "genre":
+        case "subsonic-genre":
             return {
                 "type": "genre",
                 "artist": "",
@@ -344,6 +345,9 @@ Item {
                 "display": row.title
             };
         case "year":
+        case "decade":
+        case "subsonic-year":
+        case "subsonic-decade":
             return {
                 "type": "year",
                 "artist": "",
