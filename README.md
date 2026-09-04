@@ -1,22 +1,31 @@
-# Amla — searchable music launcher for the Omarchy shell
+# <img src="icon.png" width="64" align="left"> Amla
 
-`SUPER + M` opens a searchable popup over your music catalog: local library,
-temp/download albums, and Subsonic (Navidrome) — artists, albums, songs,
-genres, years/decades, playlists. Favorites learn from your play history and
-surface as you type. Everything dispatches to the **must** TUI (primary) or
-**cliamp** (alternate). Pure QML plugin, MIT licensed.
+Searchable music launcher for Omarchy 4 (Quattro): `SUPER + M` opens a popup
+over your catalog — local library, temp/download albums, and Subsonic
+(Navidrome): artists, albums, songs, genres, years/decades, playlists.
+Favorites learn from your play history and surface as you type. Dispatches to
+**cliamp** (default) or **must** (see below). Pure QML plugin, MIT licensed.
 
-## Requirements
+![Amla launcher popup](preview.jpg)
 
-- Omarchy 4 (Quattro shell) + Quickshell 0.3
-- **must** ≥ 0.2.3 (local catalog, temp albums, playlists; provides
-  `~/.cache/must/library.db`, scanned at least once)
-- **cliamp v2+** (only needed for the cliamp target: IPC ops `url.load`,
-  `track.play/queue`, `queue.*`; v1 CLIs differ and are not supported)
-- Standard tools: `sqlite3`, `curl`, `notify-send` (`jq` optional, improves
-  cliamp play-next positioning)
-- A Subsonic/Navidrome server is optional — configure it in must; without it
-  Amla is local-only and never touches the network
+## Players: cliamp or must (either one, not both)
+
+- **cliamp** ships with Omarchy and works out of the box — Amla targets it by
+  default (requires cliamp v2+ for the `url.load` / `track.*` / `queue.*` IPC
+  ops; v1 CLIs differ and are not supported). Play, enqueue, and play-next
+  all work; multi-item lists go through generated m3us.
+- **[must](https://github.com/pdfrg/must)** (≥ 0.2.3) is worth a look if you
+  live in the terminal: library browser with album/artist art galleries,
+  artist bios, and vim-style keybindings. It needs a Go toolchain to build,
+  but Amla's must support runs deepest — native catalog resolvers,
+  playshuffle, scoped random, rescan — because the two were developed
+  together. Set it as your target with `Ctrl+T` inside the popup.
+
+A Subsonic/Navidrome server is optional — configure it in must and Amla
+searches it too; without it Amla is local-only and never touches the network.
+
+Standard tools used under the hood: `sqlite3`, `curl`, `notify-send`
+(`jq` optional, improves cliamp play-next positioning).
 
 ## Install
 
@@ -57,11 +66,17 @@ io.github.pdfrg.amla` (or pull + reinstall from source).
 - Subsonic cover cache: `~/.cache/amla/art/` (`Ctrl+R` flushes)
 - Plugin config: `~/.config/amla/config.json` (`targetPlayer`, `mustBin` override)
 - must's library DB is read-only: `~/.cache/must/library.db` (FTS5)
-- `scripts/warm-art-cache.sh` pre-downloads all Navidrome covers
-  (`~/.cache/amla/art`) so browsing never waits on the network
+- `scripts/warm-art-cache.sh` is optional: it pre-downloads all Navidrome
+  covers into `~/.cache/amla/art` so browsing never waits on the network —
+  without it, thumbnails simply load on demand when the popup opens
 
 Capabilities, network use, and trust boundaries are disclosed in
 [`SECURITY.md`](SECURITY.md).
+
+## Roadmap
+
+- **MPD support** (play/enqueue via `mpc`, Subsonic items through generated
+  stream-URL m3us with `#EXTINF` titles — no bridge daemon needed)
 
 ## Removal
 
@@ -72,6 +87,11 @@ rm -rf ~/.config/amla ~/.local/state/amla ~/.cache/amla   # optional: own state
 
 then delete the `SUPER + M` line from `~/.config/hypr/bindings.lua`. No
 services, timers, or daemons are installed, so nothing else lingers.
+
+## Credits
+
+Search-palette concept inspired by [Launchy](https://www.launchy.net).
+Local catalog via [must](https://github.com/pdfrg/must).
 
 ## License
 
