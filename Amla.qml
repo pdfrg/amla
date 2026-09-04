@@ -35,7 +35,7 @@ Item {
     property string filterText: ""
     property int selectedIndex: 0
     property var displayModel: []
-    property string targetPlayer: "must"
+    property string targetPlayer: "cliamp"
     property var mustConfig: Config.mustConfig("", Quickshell.env("HOME") || "")
     readonly property string home: Quickshell.env("HOME") || ""
     readonly property int cardWidth: 680
@@ -99,7 +99,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0303"
+    readonly property string buildId: "0.5.0415"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null

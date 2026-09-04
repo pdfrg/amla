@@ -135,7 +135,7 @@ function parsePluginConfig(text) {
   var obj = {}
   try { obj = JSON.parse(String(text || "{}")) } catch (e) { obj = {} }
   return {
-    targetPlayer: obj.targetPlayer === "cliamp" ? "cliamp" : "must",
+    targetPlayer: obj.targetPlayer === "must" ? "must" : "cliamp",
     mustBin: obj.mustBin === undefined ? "" : String(obj.mustBin)
   }
 }
