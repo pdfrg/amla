@@ -21,6 +21,9 @@ Item {
     // stream URLs with metadata + provider_meta, so they feed the standard
     // url.load m3u dispatch with working enqueue-next id-matching. Genre /
     // year still use the REST procs (no provider op covers them).
+    // The file is written before the running/not-running branch, so
+    // a fresh TUI can launch directly on the full list (cliamp
+    // resolves local m3u argv entries itself).
 
     id: root
 
@@ -96,7 +99,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0236"
+    readonly property string buildId: "0.5.0239"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -440,7 +443,10 @@ Item {
                 root.cancel();
                 return ;
             }
-            randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\""];
+            // Album-granular pick (GROUP BY album/artist): a random track's
+            // parent dir can span multiple albums depending on library
+            // layout, so resolve the exact album through the facet m3u flow.
+            randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
             randomAlbumProc.running = true;
             root.cancel();
             return ;
@@ -597,10 +603,6 @@ Item {
     }
 
     function runSubM3u(tracks, fallbackAction) {
-        // The file is written before the running/not-running branch, so
-        // a fresh TUI can launch directly on the full list (cliamp
-        // resolves local m3u argv entries itself).
-
         var m = root.subTracksToM3u(tracks);
         if (m.firstUrl.length === 0)
             return ;
@@ -875,27 +877,26 @@ Item {
                 } catch (e) {
                     return ;
                 }
-                if (!rows.length || !rows[0].path)
+                if (!rows.length || !rows[0].album)
                     return ;
 
-                var dir = Catalog.parentDir(String(rows[0].path));
-                if (!dir || dir.length === 0)
-                    return ;
-
-                var pseudoRow = {
-                    "kind": "temp",
-                    "title": Catalog.basename(dir),
-                    "path": dir
+                // Album-granular pick: resolve the exact album through the
+                // facet m3u flow (a random track's parent dir can span
+                // multiple albums depending on library layout).
+                var picked = {
+                    "kind": "album",
+                    "title": rows[0].album,
+                    "album": rows[0].album,
+                    "artist": rows[0].a || ""
                 };
-                root.runCliamp(pseudoRow, "play", {
-                    "op": "url.load",
-                    "params": {
-                        "path": dir,
-                        "play": true
-                    },
-                    "clearFirst": true,
-                    "launchTarget": dir
-                });
+                root.pendingSubAction = "play";
+                root.pendingSubRow = picked;
+                cliampResolveProc.environment = {
+                    "AMLA_DB": root.mustDb,
+                    "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked)
+                };
+                cliampResolveProc.command = ["sh", "-c", "mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.running = true;
             }
         }
 
@@ -1055,7 +1056,7 @@ Item {
                     // subsonic requests stay silent — nothing else applies.
                     if (root.randomFallbackLocal) {
                         root.randomFallbackLocal = false;
-                        randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\""];
+                        randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
                         randomAlbumProc.running = true;
                     }
                     return ;
