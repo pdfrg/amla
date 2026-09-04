@@ -173,8 +173,13 @@ function build(action, row, target, ctx) {
     if (ctx.m3uBody)
         prep = "mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
     var launch
-    if (action === "play")
+    if (action === "play" && String(ctx.launchTarget || "").length > 0)
         launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play >/dev/null 2>&1 &"
+    else if (action === "play")
+        // Native provider loads have no path/URL to hand a fresh TUI (e.g.
+        // provider.load_album): start it bare and ask for a retry, mirroring
+        // the must enqueue fallback. No history (exit 1).
+        launch = "  " + notify("cliamp not running — started it; try again once it's up") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     else
         launch = "  " + notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     return "if " + RUNNING + "; then\n  " + prep + runOp + "\nelse\n" + launch + "\nfi"

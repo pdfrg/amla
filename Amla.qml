@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0227"
+    readonly property string buildId: "0.5.0229"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -612,6 +612,19 @@ Item {
 
     // cliamp + subsonic album/artist: REST → track list → stream URLs.
     function dispatchSubsonicCliamp(row, action) {
+        if (row.kind === "subsonic-album" && action === "play" && row.id && String(row.id).length > 0) {
+            // Native provider load: replaces the live playlist and starts
+            // playback in one call (no REST round-trip, no m3u). Enqueue
+            // paths still resolve track URLs (album_tracks proc below).
+            runCliamp(row, action, {
+                "op": "provider.load_album",
+                "params": {
+                    "provider": "navidrome",
+                    "album": row.id
+                }
+            });
+            return ;
+        }
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         pendingSubAction = action;
         pendingSubRow = row;
