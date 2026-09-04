@@ -486,6 +486,18 @@ function artDirFor(row) {
     }
 }
 
+// Art id for a subsonic row: the album id first for songs (per-song art
+// rows can go stale server-side — mirror of must's loadSubsonicAlbumArtCmd
+// preference; getCoverArt resolves a raw album id to the album image),
+// else the row's own coverArt/id.
+function subArtId(row) {
+    if (!row)
+        return ""
+    if (row.kind === "subsonic-song" && row.albumId)
+        return String(row.albumId)
+    return String(row.coverArt || row.id || "")
+}
+
 // Disk-cache path for a subsonic coverArt id (~10-30 KB per file, size=96).
 function subArtCacheFile(coverArtId, cacheDir) {
     var id = String(coverArtId || "")

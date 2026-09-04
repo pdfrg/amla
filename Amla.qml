@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0017"
+    readonly property string buildId: "0.5.0019"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -197,7 +197,7 @@ Item {
     // ----- artwork (plan step 6) -----
     function artFor(row) {
         if (row.kind.indexOf("subsonic-") === 0) {
-            var cache = Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir);
+            var cache = Catalog.subArtCacheFile(Catalog.subArtId(row), root.artCacheDir);
             return artMap[cache] || "";
         }
         var dirs = Catalog.artDirsFor(row);
@@ -217,13 +217,13 @@ Item {
             var row = root.displayModel[i];
             var job = null;
             if (row.kind.indexOf("subsonic-") === 0) {
-                var cache = Catalog.subArtCacheFile(row.coverArt || row.id, root.artCacheDir);
+                var cache = Catalog.subArtCacheFile(Catalog.subArtId(row), root.artCacheDir);
                 if (cache.length > 0 && root.subEnabled) {
                     var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                     job = {
                         "dir": Catalog.artDirFor(row) || cache,
                         "out": cache,
-                        "url": Subsonic.coverArtUrl(root.sub.url, auth, row.coverArt || row.id, 96)
+                        "url": Subsonic.coverArtUrl(root.sub.url, auth, Catalog.subArtId(row), 96)
                     };
                 }
             } else {
@@ -662,7 +662,9 @@ Item {
             return ;
 
         if (!subBackfillProc.queue || subBackfillProc.queue.length === 0) {
-            var missing = History.itemsMissingPaths(40);
+            // Unidentified favorites first (no cover at all), then songs
+            // already identified but still pointing at per-song artwork.
+            var missing = History.itemsMissingPaths(40).concat(History.itemsMissingAlbumId(40));
             if (missing.length === 0)
                 return ;
 
@@ -1115,9 +1117,13 @@ Item {
                 if (item) {
                     var sub = Subsonic.getSubsonic(String(text || ""));
                     var found = item.stype === "album" ? (sub && Subsonic.albumIdMatch(sub, item.norm)) : (sub && Subsonic.songIdMatch(sub, item.norm));
-                    if (found && found.id && History.setSubId(item.key, found.id, found.coverArt)) {
-                        historyFile.setText(History.serialize());
-                        rebuildDisplay();
+                    if (found && found.id) {
+                        if (History.setSubId(item.key, found.id, found.coverArt, found.albumId)) {
+                            historyFile.setText(History.serialize());
+                            rebuildDisplay();
+                        } else if (!found.albumId && History.markAlbumIdChecked(item.key)) {
+                            historyFile.setText(History.serialize());
+                        }
                     }
                 }
                 root.pumpSubBackfill();
@@ -1254,6 +1260,9 @@ Item {
         onLoaded: {
             root.mustConfig = Config.mustConfig(text(), root.home);
             refreshListings();
+            // History may have loaded first while subEnabled was still
+            // false — retry the server backfill now that creds exist.
+            root.pumpSubBackfill();
         }
     }
 

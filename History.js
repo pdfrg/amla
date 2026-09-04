@@ -213,16 +213,54 @@ function matchTempDirs(tempPaths) {
     return changed
 }
 
-// Attach a subsonic identity found by the server backfill. Flips the row
-// to its subsonic kind (art via cover cache); song dispatch needs must's
-// subsonic:song: case (see MUST_HANDOFF), album dispatch works today.
-function setSubId(key, subId, coverArt) {
+// Attach a subsonic identity found by the server backfill (must ≥ 0.2.3
+// resolves songid/albumid exactly). albumId (when known) steers artwork
+// at the album image: per-song (disc-level) art rows can go stale
+// server-side (mirror of must's loadSubsonicAlbumArtCmd preference).
+function setSubId(key, subId, coverArt, albumId) {
     var it = items[key]
-    if (!it || !subId || it.subId === subId)
+    if (!it || !subId)
         return false
+    var changed = it.subId !== subId
     it.subId = subId
-    if (coverArt)
+    if (coverArt && it.coverArt !== coverArt) {
         it.coverArt = coverArt
+        changed = true
+    }
+    if (albumId && it.albumId !== albumId) {
+        it.albumId = albumId
+        changed = true
+    }
+    return changed
+}
+
+// Song favorites already identified, but still pointing artwork at the
+// per-song art row: top them up with the album id for the album image.
+function itemsMissingAlbumId(n) {
+    var out = []
+    var keys = Object.keys(items)
+    for (var i = 0; i < keys.length && out.length < n; i++) {
+        var it = items[keys[i]]
+        if (it.type !== "song" || !it.subId || it.albumId || it.albumIdChecked || it.path)
+            continue
+        out.push({
+            "key": keys[i],
+            "type": "song",
+            "artist": it.artist || "",
+            "album": it.album || "",
+            "title": it.title || ""
+        })
+    }
+    return out
+}
+
+// Remember that the server has no album id for this song, so the
+// backfill stops re-querying it on every run.
+function markAlbumIdChecked(key) {
+    var it = items[key]
+    if (!it || it.albumIdChecked)
+        return false
+    it.albumIdChecked = true
     return true
 }
 
@@ -307,6 +345,7 @@ function favoriteRow(it) {
     if ((kind === "song" || kind === "album" || kind === "artist") && (it.coverArt || it.subId)) {
         row.kind = "subsonic-" + kind
         row.coverArt = it.coverArt || ""
+        row.albumId = it.albumId || ""
         row.id = it.subId || ""
     }
     if (it.artDir)

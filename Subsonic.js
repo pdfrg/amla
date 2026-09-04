@@ -116,7 +116,8 @@ function songIdMatch(sub, normTitle) {
         if (normId(songs[i].title) === want)
             return {
                 "id": songs[i].id || "",
-                "coverArt": songs[i].coverArt || ""
+                "coverArt": songs[i].coverArt || "",
+                "albumId": songs[i].albumId || ""
             }
     }
     return null
@@ -209,6 +210,7 @@ function searchRows(sub, serverName, serverBadge, query) {
             "album": String(a.album || ""),
             "titleField": String(a.title),
             "coverArt": a.coverArt || "",
+            "albumId": a.albumId || "",
             "id": a.id || "",
             "duration": a.duration || 0
         })
