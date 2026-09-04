@@ -188,7 +188,13 @@ function build(action, row, target, ctx) {
         // the must enqueue fallback. No history (exit 1).
         launch = "  " + notify("/usr/bin/cliamp not running — started it; try again once it's up") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     else
-        launch = "  " + notify("/usr/bin/cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
+        // Enqueue / enqueue-next with a stopped player: notify only, do NOT
+        // launch. A cold launch seeds the queue with the startup provider
+        // (radio), so auto-opening would either strand the item appended to
+        // radio stations or need a retry dance. must keeps its launch+retry
+        // fallback (its playlist persists); cliamp stays closed until the
+        // user starts it with play / playshuffle / random-album.
+        launch = "  " + notify("cliamp not running — enqueue needs a running player; use play to start it") + "\n  exit 1"
     // The m3u (when any) is written before the branch, so a not-running play
     // can launch the TUI directly on the file — cliamp resolves local m3u
     // argv entries itself. Facet paths whose file already exists (sqlite
