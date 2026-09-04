@@ -119,6 +119,32 @@ function facetSql() {
     "SELECT year AS y, COUNT(DISTINCT album) AS n FROM tracks WHERE year > 0 GROUP BY year ORDER BY year;"
 }
 
+// Facets over the amla file index: same g/y shapes as facetSql so the
+// facetProc handler parses both identically.
+function filesFacetSql() {
+  return "SELECT genre AS g, COUNT(*) AS n FROM files WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
+    "SELECT year AS y, COUNT(DISTINCT album) AS n FROM files WHERE year > 0 GROUP BY year ORDER BY year;"
+}
+
+// Tiered search over the amla file index: same tier/a1..a6 shapes as
+// localSearchSql so localDbRows consumes both.
+function filesSearchSql(q) {
+  var m = ftsQuery(q)
+  if (!m)
+    return ""
+  var join = "FROM files_fts f JOIN files t ON t.rowid = f.rowid WHERE files_fts MATCH '" + m.replace(/'/g, "''") + "'"
+  return "SELECT * FROM (" +
+    "SELECT 'artist' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, '' AS a2, '' AS a3, MIN(t.path) AS a4, 0 AS a5, COUNT(DISTINCT t.album) AS a6" +
+    " " + join + " GROUP BY a1 ORDER BY a1 LIMIT 12" +
+    ") UNION ALL SELECT * FROM (" +
+    "SELECT 'album' AS tier, COALESCE(NULLIF(t.album_artist,''), t.artist) AS a1, t.album AS a2, '' AS a3, MIN(t.path) AS a4, MAX(t.year) AS a5, COUNT(*) AS a6" +
+    " " + join + " GROUP BY a1, t.album ORDER BY a2 LIMIT 16" +
+    ") UNION ALL SELECT * FROM (" +
+    "SELECT 'song' AS tier, t.artist AS a1, t.album AS a2, t.title AS a3, t.path AS a4, t.year AS a5, CAST(t.duration AS INTEGER) AS a6" +
+    " " + join + " LIMIT 30" +
+    ");"
+}
+
 // Temp albums + playlists + library dirs in one shell pass.
 // T<path>, P<path> and L<path> lines. Library dirs are depth 1-2 under
 // each music root (covers flat "Artist - Album" and nested

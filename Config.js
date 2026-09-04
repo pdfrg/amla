@@ -145,7 +145,8 @@ function parsePluginConfig(text) {
     bucketWords: Array.isArray(obj.bucketWords) ? obj.bucketWords.map(function (x) { return String(x) }) : [],
     noiseTokens: Array.isArray(obj.noiseTokens) ? obj.noiseTokens.map(function (x) { return String(x) }) : [],
     mpdHost: obj.mpdHost === undefined ? "" : String(obj.mpdHost),
-    mpdPort: obj.mpdPort === undefined ? 0 : (parseInt(obj.mpdPort, 10) || 0)
+    mpdPort: obj.mpdPort === undefined ? 0 : (parseInt(obj.mpdPort, 10) || 0),
+    debugNoMust: obj.debugNoMust === true
   }
 }
 
@@ -158,7 +159,8 @@ function serializePluginConfig(cfg) {
     bucketWords: cfg.bucketWords || [],
     noiseTokens: cfg.noiseTokens || [],
     mpdHost: cfg.mpdHost || "",
-    mpdPort: cfg.mpdPort || 0
+    mpdPort: cfg.mpdPort || 0,
+    debugNoMust: cfg.debugNoMust === true
   }, null, 2) + "\n"
 }
 

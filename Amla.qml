@@ -111,10 +111,16 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0416"
+    readonly property string buildId: "0.5.0421"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
+    // Fire-and-forget file-index build (§13): the script upserts by mtime,
+    // so repeats are cheap after the cold scan. No timeout — a huge cold
+    // build may run minutes; queries keep serving stale rows meanwhile.
+    // Auto-triggers (facet/search failures) are rate-limited so overlapping
+    // failure events can't stack cold scans; manual refresh forces.
+    property double lastIndexBuildMs: 0
 
     function open(_payloadJson) {
         root.cardTop = -1;
@@ -142,7 +148,8 @@ Item {
             "bucketWords": pc.bucketWords || [],
             "noiseTokens": pc.noiseTokens || [],
             "mpdHost": pc.mpdHost || "",
-            "mpdPort": pc.mpdPort || 0
+            "mpdPort": pc.mpdPort || 0,
+            "debugNoMust": pc.debugNoMust === true
         }));
     }
 
@@ -277,7 +284,8 @@ Item {
 
     function requestSearch() {
         var q = root.filterText;
-        var sql = Catalog.localSearchSql(q);
+        var useFiles = !root.mustDbOk || root.debugNoMust();
+        var sql = useFiles ? Catalog.filesSearchSql(q) : Catalog.localSearchSql(q);
         if (sql.length === 0) {
             root.searchRows = [];
             root.searchedQuery = "";
@@ -289,7 +297,8 @@ Item {
             return ;
         }
         searchProc.query = q;
-        searchProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, sql];
+        searchProc.dbUsed = useFiles ? "files" : "must";
+        searchProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", useFiles ? root.filesDb : root.mustDb, sql];
         searchProc.running = true;
         if (root.subEnabled) {
             subSearchProc.query = q;
@@ -816,12 +825,76 @@ Item {
         refreshListings();
     }
 
+    // Test hook (§19): "debugNoMust": true in config.json simulates a
+    // must-less machine without touching the real DB.
+    function debugNoMust() {
+        return (root.amlaPluginCfg && root.amlaPluginCfg.debugNoMust) === true;
+    }
+
+    // The indexer ships inside the plugin dir (top level, not scripts/ —
+    // install.sh excludes scripts/). resolvedUrl keeps working in the dev
+    // checkout, the rsynced install, and a marketplace layout.
+    function indexerPath() {
+        var u = String(Qt.resolvedUrl("index-library.py"));
+        if (u.indexOf("file://") === 0)
+            u = u.substring(7);
+
+        return u;
+    }
+
+    function maybeBuildIndex(force, reason) {
+        if (indexBuildProc.running)
+            return ;
+
+        if (!force && Date.now() - root.lastIndexBuildMs < 120000)
+            return ;
+
+        var roots = root.libraryRoots.musicDirs || [];
+        if (roots.length === 0)
+            return ;
+
+        var cmd = ["/usr/bin/python3", root.indexerPath(), "--db", root.filesDb, "--tagger", "auto"];
+        var pc = root.amlaPluginCfg || {
+        };
+        if ((pc.bucketWords || []).length > 0)
+            cmd = cmd.concat(["--extra-buckets", pc.bucketWords.join(",")]);
+
+        if ((pc.noiseTokens || []).length > 0)
+            cmd = cmd.concat(["--extra-noise", pc.noiseTokens.join(",")]);
+
+        console.log("[amla] index build (" + (reason || "auto") + "): " + cmd.join(" "));
+        indexBuildProc.command = cmd.concat(roots);
+        indexBuildProc.running = true;
+    }
+
+    function runFilesFacets() {
+        if (facetProc.running)
+            return ;
+
+        facetProc.mode = "files";
+        facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.filesDb, Catalog.filesFacetSql()];
+        facetProc.running = true;
+    }
+
     function refreshListings() {
         listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.libraryRoots.tempDirs, root.playlistDir, root.libraryRoots.musicDirs)];
         listingProc.running = true;
     }
 
     function refreshFacets() {
+        // A query already in flight owns the completion handler (and the
+        // mode flag); re-arming mid-flight kills it and its nonzero exit
+        // would masquerade as a missing DB. Its completion rebuilds.
+        if (facetProc.running)
+            return ;
+
+        if (root.debugNoMust()) {
+            root.mustDbOk = false;
+            root.runFilesFacets();
+            root.maybeBuildIndex(false, "debug-no-must");
+            return ;
+        }
+        facetProc.mode = "must";
         facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.facetSql()];
         facetProc.running = true;
         if (root.subEnabled) {
@@ -839,6 +912,10 @@ Item {
     function refreshCatalog() {
         refreshListings();
         refreshFacets();
+        if (!root.mustDbOk || root.debugNoMust()) {
+            root.runFilesFacets();
+            root.maybeBuildIndex(true, "manual-refresh");
+        }
         artMap = ({
         });
         flushArtProc.command = ["/usr/bin/sh", "-c", "/usr/bin/rm -rf " + Catalog.shq(root.artCacheDir) + "; mkdir -p " + Catalog.shq(root.artCacheDir)];
@@ -971,13 +1048,26 @@ Item {
         id: searchProc
 
         property string query: ""
+        property string dbUsed: "must"
 
-        onExited: {
-            // -readonly keeps a missing DB from being created as an empty
-            // file; a nonzero exit means must is absent → library dir rows.
-            root.mustDbOk = searchProc.exitCode === 0;
+        onExited: function(exitCode) {
+            if (exitCode === 0 && searchProc.dbUsed === "must")
+                root.mustDbOk = true;
+
+            // must query failed (DB gone) → flip to the file index once,
+            // then retry this query against it. Files failures stay local
+            // (no loop): stale/empty rows until the next build.
+            var failedMust = exitCode !== 0 && searchProc.dbUsed === "must";
+            if (failedMust) {
+                console.log("[amla] must search failed (exit " + exitCode + "), using file index");
+                root.mustDbOk = false;
+                root.runFilesFacets();
+                root.maybeBuildIndex(false, "search-fail");
+            }
             if (root.searchDirty) {
                 root.searchDirty = false;
+                root.requestSearch();
+            } else if (failedMust) {
                 root.requestSearch();
             }
         }
@@ -1352,13 +1442,34 @@ Item {
     Process {
         id: facetProc
 
-        onExited: {
-            root.mustDbOk = facetProc.exitCode === 0;
+        property string mode: "must"
+
+        onExited: function(exitCode) {
+            if (facetProc.mode === "must") {
+                if (exitCode === 0) {
+                    root.mustDbOk = true;
+                } else {
+                    // must absent → the file index becomes the local
+                    // backend: facet it and (re)build it.
+                    console.log("[amla] must facet failed (exit " + exitCode + "), using file index");
+                    root.mustDbOk = false;
+                    root.runFilesFacets();
+                    root.maybeBuildIndex(false, "facet-fail");
+                }
+            } else {
+                root.mustDbOk = false;
+            }
         }
 
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
+                // Drop stale completions: a slow query from the previous
+                // backend must not overwrite the current one's facets.
+                var wantFiles = !root.mustDbOk || root.debugNoMust();
+                if ((facetProc.mode === "files") !== wantFiles)
+                    return ;
+
                 var all = Catalog.parseSqliteJson(text);
                 root.facetGenres = all.filter(function(r) {
                     return r.g !== undefined;
@@ -1367,6 +1478,26 @@ Item {
                     return r.y !== undefined;
                 });
                 root.rebuildDisplay();
+            }
+        }
+
+    }
+
+    // File-index build completion: refresh facets over the new rows and
+    // re-run the live query so song rows pop in without retyping.
+    Process {
+        id: indexBuildProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                console.log("[amla] index build done: " + String(text || "").slice(0, 300));
+                root.lastIndexBuildMs = Date.now();
+                root.runFilesFacets();
+                if (root.filterText.length > 0)
+                    root.requestSearch();
+                else
+                    root.rebuildDisplay();
             }
         }
 
@@ -1444,6 +1575,9 @@ Item {
             root.amlaPluginCfg = pc;
             root.targetPlayer = pc.targetPlayer;
             root.pluginMustBin = pc.mustBin || "";
+            if (pc.debugNoMust)
+                root.mustDbOk = false;
+
             refreshRoots();
         }
     }
