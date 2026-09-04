@@ -128,7 +128,13 @@ function build(action, row, target, ctx) {
                 launchArgs = "play " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, "")) + " --play"
             else
                 launchArgs = "play " + res + " --play"
-            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" play " + res + "\nelse\n  " +
+            // Pin shuffle explicitly off after a running play: must persists
+            // shuffle in its state file and ctlPlay keeps it, so a previous
+            // playshuffle would otherwise leak into this play, even across
+            // restarts. Play's own status decides history. Cold launch needs
+            // nothing: auto-start builds shuffleMode from the verb
+            // (playshuffle/--shuffle → on, plain play → off).
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" play " + res + "\n  ST=$?\n  \"$BIN\" shuffle off >/dev/null 2>&1\n  exit $ST\nelse\n  " +
                 launchVerb(launchArgs) + "\nfi"
         }
         var verb = action === "enqueue" ? "enqueue" : "enqueue-next"
