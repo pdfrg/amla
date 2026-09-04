@@ -138,7 +138,10 @@ function build(action, row, target, ctx) {
     }
 
     // ----- cliamp target (v2 IPC) -----
-    // The QML side sets AMLA_OP, AMLA_PARAMS (JSON) and, for multi-item m3u
+    // Requires cliamp v2+ (`remote call` IPC). Older v1 binaries lack the
+    // `remote` subcommand, so probe for it up front and notify instead of
+    // failing silently: the catalog stays browsable, playback just needs
+    // v2 (or must via Ctrl+T). The QML side sets AMLA_OP, AMLA_PARAMS (JSON) and, for multi-item m3u
     // dispatches, AMLA_M3U (m3u body written to $XDG_RUNTIME_DIR/amla/queue.m3u
     // before the call). ctx.launchTarget is the path/URL handed to a fresh TUI
     // when cliamp is not running (play actions only).
@@ -173,6 +176,9 @@ function build(action, row, target, ctx) {
     var prep = ""
     if (ctx.m3uBody)
         prep = "/usr/bin/mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
+    // Capability guard first (before any m3u prep): missing binary, or v1
+    // without `remote`. Notifies and fails so history never records a no-op.
+    var guard = "if [ ! -x /usr/bin/cliamp ] && ! command -v cliamp >/dev/null 2>&1; then\n  " + notify("amla: cliamp not found — install it (check options with yay -Ss cliamp) or press Ctrl+T for must") + "\n  exit 1\nfi\nif ! /usr/bin/cliamp remote --help >/dev/null 2>&1 && ! cliamp remote --help >/dev/null 2>&1; then\n  " + notify("amla: cliamp v2+ required for playback — upgrade cliamp (check options with yay -Ss cliamp). Catalog still browsable; or press Ctrl+T for must") + "\n  exit 1\nfi\n"
     var launch
     if (action === "play" && String(ctx.launchTarget || "").length > 0)
         launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play >/dev/null 2>&1 &"
@@ -187,5 +193,5 @@ function build(action, row, target, ctx) {
     // can launch the TUI directly on the file — cliamp resolves local m3u
     // argv entries itself. Facet paths whose file already exists (sqlite
     // resolve) pass no m3uBody and are unaffected.
-    return prep + "if " + RUNNING + "; then\n  " + runOp + "\nelse\n" + launch + "\nfi"
+    return guard + prep + "if " + RUNNING + "; then\n  " + runOp + "\nelse\n" + launch + "\nfi"
 }
