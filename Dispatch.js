@@ -88,7 +88,7 @@ function build(action, row, target, ctx) {
         // "bubbletea: error opening TTY"), and omarchy-launch-tui is a
         // passthrough, so pass the resolved binary path.
         var launchVerb = function (args) {
-            return "omarchy-launch-tui \"$BIN\" " + args + " >/dev/null 2>&1 &"
+            return "omarchy-launch-tui --app-id=must.large \"$BIN\" " + args + " >/dev/null 2>&1 &"
         }
         if (action === "random-album") {
             return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" random\nelse\n  " + launchVerb("random") + "\nfi"
