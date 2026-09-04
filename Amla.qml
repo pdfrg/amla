@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0008"
+    readonly property string buildId: "0.5.0009"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -275,8 +275,8 @@ Item {
             return ;
 
         var row = root.displayModel[index];
-        if (row.kind === "action" && row.action === "random-album")
-            action = "random-album";
+        if (row.kind === "action" && String(row.action || "").indexOf("random-album") === 0)
+            action = row.action;
 
         if (!action)
             action = "play";
@@ -287,6 +287,11 @@ Item {
         if (action !== "enqueue")
             root.cancel();
 
+    }
+
+    function playRandom(scope) {
+        dispatch(null, scope && scope.length > 0 ? "random-album-" + scope : "random-album");
+        root.cancel();
     }
 
     function historyFor(row) {
@@ -375,17 +380,42 @@ Item {
             "mustBin": root.pluginMustBin,
             "query": root.filterText
         };
-        if (target === "cliamp" && action === "random-album" && root.subEnabled) {
-            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            pendingSubAction = "play";
-            pendingSubRow = null;
-            subRandomProc.command = ["curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
-            subRandomProc.running = true;
-            return ;
-        }
-        if (target === "cliamp" && action === "random-album") {
+        if (target === "cliamp" && String(action || "").indexOf("random-album") === 0) {
+            if ((action === "random-album" || action === "random-album-subsonic") && root.subEnabled) {
+                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                pendingSubAction = "play";
+                pendingSubRow = null;
+                subRandomProc.command = ["curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+                subRandomProc.running = true;
+                root.cancel();
+                return ;
+            }
+            if (action === "random-album-temp") {
+                var temps = (root.listing && root.listing.temp) || [];
+                if (temps.length === 0)
+                    return ;
+
+                var dir = temps[Math.floor(Math.random() * temps.length)];
+                var pseudoTemp = {
+                    "kind": "temp",
+                    "title": Catalog.basename(dir),
+                    "path": dir
+                };
+                root.runCliamp(pseudoTemp, "play", {
+                    "op": "url.load",
+                    "params": {
+                        "path": dir,
+                        "play": true
+                    },
+                    "clearFirst": true,
+                    "launchTarget": dir
+                });
+                root.cancel();
+                return ;
+            }
             randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT path FROM tracks WHERE path != '' ORDER BY RANDOM() LIMIT 1\""];
             randomAlbumProc.running = true;
+            root.cancel();
             return ;
         }
         if (target === "cliamp" && row) {
@@ -1135,7 +1165,10 @@ Item {
                                 root.activate(root.selectedIndex, "play");
                             event.accepted = true;
                         } else if (event.key === Qt.Key_R && (event.modifiers & Qt.AltModifier)) {
-                            root.dispatch(null, "random-album");
+                            root.playRandom("");
+                            event.accepted = true;
+                        } else if ((event.key === Qt.Key_1 || event.key === Qt.Key_2 || event.key === Qt.Key_3) && (event.modifiers & Qt.AltModifier)) {
+                            root.playRandom(event.key === Qt.Key_1 ? "local" : (event.key === Qt.Key_2 ? "subsonic" : "temp"));
                             event.accepted = true;
                         } else if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
                             root.refreshCatalog();
@@ -1347,7 +1380,7 @@ Item {
                 }
 
                 Text {
-                    text: "enter: play   shift+enter: enqueue   ctrl+enter: play next   alt+r: random album   ctrl+t: player"
+                    text: "enter: play   shift+enter: enqueue   ctrl+enter: play next   alt+r: random   alt+1/2/3: local/subsonic/temp   ctrl+t: player"
                     color: Color.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall

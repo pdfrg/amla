@@ -245,9 +245,30 @@ function emptyStateRows(mustConfig, listing) {
     rows.push({
         "kind": "action",
         "badge": "",
-        "title": "Play random album",
+        "title": "Random album (all sources)",
         "subtitle": "local · temp · subsonic",
         "action": "random-album"
+    })
+    rows.push({
+        "kind": "action",
+        "badge": "",
+        "title": "Random album (local)",
+        "subtitle": "local",
+        "action": "random-album-local"
+    })
+    rows.push({
+        "kind": "action",
+        "badge": "",
+        "title": "Random album (subsonic)",
+        "subtitle": "subsonic",
+        "action": "random-album-subsonic"
+    })
+    rows.push({
+        "kind": "action",
+        "badge": "",
+        "title": "Random album (temp)",
+        "subtitle": "temp",
+        "action": "random-album-temp"
     })
     return rows
 }

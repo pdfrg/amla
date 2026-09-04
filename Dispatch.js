@@ -90,8 +90,10 @@ function build(action, row, target, ctx) {
         var launchVerb = function (args) {
             return "omarchy-launch-tui --app-id=must.large \"$BIN\" " + args + " >/dev/null 2>&1 &"
         }
-        if (action === "random-album") {
-            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" random\nelse\n  " + launchVerb("random") + "\nfi"
+        if (action === "random-album" || action === "random-album-local" || action === "random-album-subsonic" || action === "random-album-temp") {
+            var scope = action === "random-album" ? "" : action.substring("random-album-".length)
+            var randArgs = scope.length > 0 ? "random " + scope : "random"
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + randArgs + "\nelse\n  " + launchVerb(randArgs) + "\nfi"
         }
         if (action === "playshuffle") {
             var psq = row && row.kind !== "action" && row.title ? row.title : (ctx.query || "")
