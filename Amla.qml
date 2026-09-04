@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0019"
+    readonly property string buildId: "0.5.0227"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -471,7 +471,7 @@ Item {
                     "artist": row.artist || "",
                     "album": row.album || ""
                 };
-                if (action === "play")
+                if (action === "play" || action === "playshuffle")
                     runCliamp(row, action, {
                     "op": "track.play",
                     "params": {
@@ -482,9 +482,9 @@ Item {
                 });
                 else if (action === "enqueue-next")
                     runCliamp(row, action, {
-                    "op": "queue",
+                    "op": "track.queue",
                     "params": {
-                        "path": row.path
+                        "track": tr
                     },
                     "insertNext": true
                 });
@@ -548,6 +548,18 @@ Item {
     // passed via env (nothing is shell-quoted). m3uBody (optional) is written
     // to $XDG_RUNTIME_DIR/amla/queue.m3u before the call.
     function runCliamp(row, action, ctx) {
+        // Alt+Enter playshuffle: same clear-first load as play, then the
+        // script switches shuffle explicitly on (ctx.shuffleAfter).
+        if (action === "playshuffle") {
+            action = "play";
+            if (!ctx.params)
+                ctx.params = {
+            };
+
+            ctx.params.play = true;
+            ctx.clearFirst = true;
+            ctx.shuffleAfter = true;
+        }
         dispatchProc.hist = historyFor(row);
         dispatchProc.script = Dispatch.build(action, row, "cliamp", ctx);
         dispatchProc.environment = {
