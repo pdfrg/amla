@@ -1,28 +1,28 @@
-# <img src="icon.png" width="64" align="left"> Amla
+# <img src="icon.png" width="64" align="left"> amla — advanced music launcher
 
-Searchable music launcher for Omarchy 4 (Quattro): `SUPER + M` opens a popup
+Searchable music launcher plugin for Omarchy 4 (Quattro): `SUPER + M` opens a popup
 over your catalog — local library, temp/download albums, and Subsonic
 (Navidrome): artists, albums, songs, genres, years/decades, playlists.
 Favorites learn from your play history and surface as you type. Dispatches to
 **cliamp** (default) or **must** (see below). Pure QML plugin, MIT licensed.
 
-![Amla launcher popup](preview.jpg)
+![amla launcher popup](preview.jpg)
 
-## Players: cliamp or must (either one, not both)
+## Players: cliamp or must (either one, or try both)
 
-- **cliamp** ships with Omarchy and works out of the box — Amla targets it by
+- **cliamp** ships with Omarchy and works out of the box — amla targets it by
   default (requires cliamp v2+ for the `url.load` / `track.*` / `queue.*` IPC
   ops; v1 CLIs differ and are not supported). Play, enqueue, and play-next
   all work; multi-item lists go through generated m3us.
-- **[must](https://github.com/pdfrg/must)** (≥ 0.2.3) is worth a look if you
-  live in the terminal: library browser with album/artist art galleries,
-  artist bios, and vim-style keybindings. It needs a Go toolchain to build,
-  but Amla's must support runs deepest — native catalog resolvers,
+- **[must - music TUI](https://github.com/pdfrg/must)** (≥ 0.2.3) is worth a look:
+  library search and browser, album art, artist art, and artist galleries
+  (in the terminal), artist bios, and vim-style keybindings. It needs a Go toolchain
+  to build, but amla's must support runs deepest — native catalog resolvers,
   playshuffle, scoped random, rescan — because the two were developed
   together. Set it as your target with `Ctrl+T` inside the popup.
 
-A Subsonic/Navidrome server is optional — configure it in must and Amla
-searches it too; without it Amla is local-only and never touches the network.
+A Subsonic/Navidrome server is optional — configure it in must and amla
+searches it too; without it amla is local-only and never touches the network.
 
 Standard tools used under the hood: `sqlite3`, `curl`, `notify-send`
 (`jq` optional, improves cliamp play-next positioning).
@@ -91,7 +91,6 @@ services, timers, or daemons are installed, so nothing else lingers.
 ## Credits
 
 Search-palette concept inspired by [Launchy](https://www.launchy.net).
-Local catalog via [must](https://github.com/pdfrg/must).
 
 ## License
 

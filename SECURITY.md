@@ -1,6 +1,6 @@
 # SECURITY.md — amla capability and trust-boundary disclosure
 
-Amla (`io.github.pdfrg.amla`) is a Quickshell `menu` plugin. Like all Omarchy
+amla (`io.github.pdfrg.amla`) is a Quickshell `menu` plugin. Like all Omarchy
 plugins it runs **unsandboxed inside the long-running shell process with your
 user permissions**. This file lists everything it can do, so reviewers and
 users don't have to take that on faith.
