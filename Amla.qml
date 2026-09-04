@@ -99,7 +99,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0239"
+    readonly property string buildId: "0.5.0258"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -269,12 +269,12 @@ Item {
             return ;
         }
         searchProc.query = q;
-        searchProc.command = ["sqlite3", "-json", root.mustDb, sql];
+        searchProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", root.mustDb, sql];
         searchProc.running = true;
         if (root.subEnabled) {
             subSearchProc.query = q;
             subSearchProc.auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subSearchProc.command = ["curl", "-s", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
+            subSearchProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
             subSearchProc.running = true;
         }
     }
@@ -415,7 +415,7 @@ Item {
                 pendingSubAction = "play";
                 pendingSubRow = null;
                 root.randomFallbackLocal = action === "random-album";
-                subRandomProc.command = ["curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+                subRandomProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
                 subRandomProc.running = true;
                 root.cancel();
                 return ;
@@ -446,7 +446,7 @@ Item {
             // Album-granular pick (GROUP BY album/artist): a random track's
             // parent dir can span multiple albums depending on library
             // layout, so resolve the exact album through the facet m3u flow.
-            randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+            randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
             randomAlbumProc.running = true;
             root.cancel();
             return ;
@@ -543,7 +543,7 @@ Item {
                     "AMLA_DB": root.mustDb,
                     "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row)
                 };
-                cliampResolveProc.command = ["sh", "-c", "mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
                 return ;
             }
@@ -551,7 +551,7 @@ Item {
         }
         dispatchProc.script = Dispatch.build(action, row, target, ctx);
         dispatchProc.hist = historyFor(row);
-        dispatchProc.command = ["sh", "-c", dispatchProc.script];
+        dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
         dispatchProc.running = true;
     }
 
@@ -579,7 +579,7 @@ Item {
             }),
             "AMLA_M3U": String(ctx.m3uBody || "")
         };
-        dispatchProc.command = ["sh", "-c", dispatchProc.script];
+        dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
         dispatchProc.running = true;
     }
 
@@ -651,7 +651,7 @@ Item {
                     "limit": 200
                 })
             };
-            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.command = ["/usr/bin/sh", "-c", "/usr/bin/cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
             subCliampTracksProc.running = true;
             return ;
         }
@@ -668,7 +668,7 @@ Item {
                     "limit": 100
                 })
             };
-            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.command = ["/usr/bin/sh", "-c", "/usr/bin/cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
             subCliampTracksProc.running = true;
             return ;
         }
@@ -676,12 +676,12 @@ Item {
         pendingSubAction = action;
         pendingSubRow = row;
         if (row.kind === "subsonic-genre") {
-            subGenreProc.command = ["curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
+            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
             subGenreProc.running = true;
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
             var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
-            subYearListProc.command = ["curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
+            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
             subYearListProc.running = true;
         } else {
             // Id-less album row (e.g. from history): provider.search over
@@ -695,7 +695,7 @@ Item {
                     "limit": 100
                 })
             };
-            subCliampTracksProc.command = ["sh", "-c", "cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
+            subCliampTracksProc.command = ["/usr/bin/sh", "-c", "/usr/bin/cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
             subCliampTracksProc.running = true;
         }
     }
@@ -712,7 +712,7 @@ Item {
             "AMLA_DB": root.mustDb,
             "AMLA_SQL": Catalog.trackPathSql(artist, album, History.stripArtistPrefix(artist, title))
         };
-        mprisPathProc.command = ["sh", "-c", "sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\""];
+        mprisPathProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\""];
         mprisPathProc.running = true;
     }
 
@@ -769,7 +769,7 @@ Item {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         subBackfillProc.current = next;
         var url = next.stype === "album" ? Subsonic.backfillAlbumUrl(root.sub.url, auth, next.artist, next.album) : Subsonic.backfillSongUrl(root.sub.url, auth, next.artist, next.title);
-        subBackfillProc.command = ["curl", "-s", "--max-time", "5", url];
+        subBackfillProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", url];
         subBackfillProc.running = true;
     }
 
@@ -783,21 +783,21 @@ Item {
             root.pumpSubBackfill();
             return ;
         }
-        backfillPathsProc.command = ["sqlite3", "-json", "-readonly", root.mustDb, Catalog.backfillPathsSql(missing)];
+        backfillPathsProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.backfillPathsSql(missing)];
         backfillPathsProc.running = true;
     }
 
     function refreshListings() {
-        listingProc.command = ["sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
+        listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
         listingProc.running = true;
     }
 
     function refreshFacets() {
-        facetProc.command = ["sqlite3", "-json", root.mustDb, Catalog.facetSql()];
+        facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", root.mustDb, Catalog.facetSql()];
         facetProc.running = true;
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFacetProc.command = ["sh", "-c", "curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'"];
+            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'"];
             subFacetProc.running = true;
         }
     }
@@ -812,9 +812,9 @@ Item {
         refreshFacets();
         artMap = ({
         });
-        flushArtProc.command = ["sh", "-c", "rm -rf " + Catalog.shq(root.artCacheDir) + "; mkdir -p " + Catalog.shq(root.artCacheDir)];
+        flushArtProc.command = ["/usr/bin/sh", "-c", "/usr/bin/rm -rf " + Catalog.shq(root.artCacheDir) + "; mkdir -p " + Catalog.shq(root.artCacheDir)];
         flushArtProc.running = true;
-        rescanProc.command = ["sh", "-c", Dispatch.mustBinScript(root.pluginMustBin) + "\nif " + Dispatch.mustRunningExpr() + "; then \"$BIN\" rescan; fi"];
+        rescanProc.command = ["/usr/bin/sh", "-c", Dispatch.mustBinScript(root.pluginMustBin) + "\nif " + Dispatch.mustRunningExpr() + "; then \"$BIN\" rescan; fi"];
         rescanProc.running = true;
     }
 
@@ -895,7 +895,7 @@ Item {
                     "AMLA_DB": root.mustDb,
                     "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked)
                 };
-                cliampResolveProc.command = ["sh", "-c", "mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
             }
         }
@@ -1019,7 +1019,7 @@ Item {
             if (jobs.length === 0 || artProc.running)
                 return ;
 
-            artProc.command = ["sh", "-c", Catalog.artProbeCommand(jobs)];
+            artProc.command = ["/usr/bin/sh", "-c", Catalog.artProbeCommand(jobs)];
             artProc.running = true;
         }
     }
@@ -1056,7 +1056,7 @@ Item {
                     // subsonic requests stay silent — nothing else applies.
                     if (root.randomFallbackLocal) {
                         root.randomFallbackLocal = false;
-                        randomAlbumProc.command = ["sh", "-c", "sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+                        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
                         randomAlbumProc.running = true;
                     }
                     return ;
@@ -1104,8 +1104,8 @@ Item {
 
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                 var parts = [];
-                for (var i = 0; i < albums.length; i++) parts.push("curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, albums[i].id) + "'; echo ---AMLAYEAR---")
-                subYearExpandProc.command = ["sh", "-c", parts.join(" ")];
+                for (var i = 0; i < albums.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, albums[i].id) + "'; echo ---AMLAYEAR---")
+                subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join(" ")];
                 subYearExpandProc.running = true;
             }
         }
@@ -1340,7 +1340,7 @@ Item {
     Process {
         id: dirSetup
 
-        command: ["sh", "-c", "mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art"]
+        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art"]
         running: true
     }
 
@@ -1520,6 +1520,7 @@ Item {
                         id: filterDisplay
 
                         text: root.filterText.length > 0 ? root.filterText : "type to search"
+                        textFormat: Text.PlainText
                         color: root.filterText.length > 0 ? Color.menu.text : Color.muted
                         font.family: Style.font.menuFamily
                         font.pixelSize: Style.font.heading
@@ -1631,6 +1632,7 @@ Item {
 
                                 Text {
                                     text: modelData.title
+                                    textFormat: Text.PlainText
                                     color: index === root.selectedIndex ? Color.menu.selectedText : Color.menu.text
                                     font.family: Style.font.menuFamily
                                     font.pixelSize: Style.font.heading
@@ -1641,6 +1643,7 @@ Item {
 
                                 Text {
                                     text: modelData.subtitle
+                                    textFormat: Text.PlainText
                                     color: Color.menu.text
                                     opacity: 0.52
                                     font.family: Style.font.menuFamily
@@ -1666,6 +1669,7 @@ Item {
                                 id: badgeText
 
                                 text: modelData.badge
+                                textFormat: Text.PlainText
                                 color: Color.muted
                                 font.family: Style.font.family
                                 font.pixelSize: Style.font.bodySmall

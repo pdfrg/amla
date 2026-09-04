@@ -126,10 +126,10 @@ function listingCommand(tempDirs, playlistDir) {
     dirs.push(String(tempDirs[i]).replace(/'/g, "'\\''"))
   var cmd = ""
   for (var j = 0; j < dirs.length; j++) {
-    cmd += "find '" + dirs[j] + "' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sed 's/^/T/' | sort -f;"
+    cmd += "/usr/bin/find '" + dirs[j] + "' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | /usr/bin/sed 's/^/T/' | /usr/bin/sort -f;"
   }
   if (playlistDir)
-    cmd += "ls -1 '" + String(playlistDir).replace(/'/g, "'\\''") + "'/*.m3u 2>/dev/null | sed 's/^/P/';"
+    cmd += "/usr/bin/ls -1 '" + String(playlistDir).replace(/'/g, "'\\''") + "'/*.m3u 2>/dev/null | /usr/bin/sed 's/^/P/';"
   return cmd
 }
 
@@ -407,7 +407,7 @@ function artProbeCommand(jobs) {
         var out = job.out
         if (job.url) {
             lines.push("if [ -f " + shq(out) + " ]; then echo A" + shq(job.dir + "|" + out) +
-                "; else rm -f " + shq(out) + "; curl -fs --max-time 10 -o " + shq(out) + " " + shq(job.url) +
+                "; else /usr/bin/rm -f " + shq(out) + "; /usr/bin/curl -fs --max-time 10 -o " + shq(out) + " " + shq(job.url) +
                 " && echo A" + shq(job.dir + "|" + out) + "; fi")
         } else {
             var candidates = ["folder.jpg", "cover.jpg", "album.jpg", "front.jpg", "front.png", "artist.jpg", "artist.png"]

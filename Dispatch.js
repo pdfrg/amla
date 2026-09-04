@@ -24,7 +24,7 @@ function shq(s) {
 
 // Shared must-binary-not-found notification fragment (module scope: used by
 // mustBinScript's generated scripts).
-var NOTIFY_BIN = "notify-send -a amla 'amla' 'must binary not found — install it (e.g. to ~/.local/bin) or set mustBin in ~/.config/amla/config.json' >/dev/null 2>&1 &"
+var NOTIFY_BIN = "/usr/bin/notify-send -a amla 'amla' 'must binary not found — install it (e.g. to ~/.local/bin) or set mustBin in ~/.config/amla/config.json' >/dev/null 2>&1 &"
 
 function mustBinScript(configOverride) {
     // Published plugin: no dev-machine paths in code. Resolution order:
@@ -41,7 +41,7 @@ function mustRunningExpr() {
 }
 
 function cliampRunningExpr() {
-    return "cliamp status >/dev/null 2>&1"
+    return "/usr/bin/cliamp status >/dev/null 2>&1"
 }
 
 // Resolver argument for must, per row kind.
@@ -90,7 +90,7 @@ function mustResolver(row) {
 // launch fallback, notification). exit 0 = success (history records).
 function build(action, row, target, ctx) {
     var notify = function (msg) {
-        return "notify-send -a amla " + shq("amla") + " " + shq(msg) + " >/dev/null 2>&1 &"
+        return "/usr/bin/notify-send -a amla " + shq("amla") + " " + shq(msg) + " >/dev/null 2>&1 &"
     }
     var bin = mustBinScript(ctx.mustBin)
 
@@ -100,7 +100,7 @@ function build(action, row, target, ctx) {
         // "bubbletea: error opening TTY"), and omarchy-launch-tui is a
         // passthrough, so pass the resolved binary path.
         var launchVerb = function (args) {
-            return "omarchy-launch-tui --app-id=must.large \"$BIN\" " + args + " >/dev/null 2>&1 &"
+            return "/usr/share/omarchy/bin/omarchy-launch-tui --app-id=must.large \"$BIN\" " + args + " >/dev/null 2>&1 &"
         }
         if (action === "random-album" || action === "random-album-local" || action === "random-album-subsonic" || action === "random-album-temp") {
             var scope = action === "random-album" ? "" : action.substring("random-album-".length)
@@ -142,14 +142,14 @@ function build(action, row, target, ctx) {
     // before the call). ctx.launchTarget is the path/URL handed to a fresh TUI
     // when cliamp is not running (play actions only).
     var RUNNING = cliampRunningExpr()
-    var LAUNCH = "omarchy-launch-tui cliamp"
+    var LAUNCH = "/usr/share/omarchy/bin/omarchy-launch-tui cliamp"
     var RUNTIME_DIR = "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    var runOp = "cliamp remote call \"$AMLA_OP\" --params \"$AMLA_PARAMS\" --wait >/dev/null 2>&1"
+    var runOp = "/usr/bin/cliamp remote call \"$AMLA_OP\" --params \"$AMLA_PARAMS\" --wait >/dev/null 2>&1"
     // Play replaces the live playlist (url.load / track.play only append),
     // so clear first. Newline-chained: the load still runs if the clear
     // errors (e.g. empty queue). Enqueue / enqueue-next append by design.
     if (ctx.clearFirst)
-        runOp = "cliamp remote call \"queue.clear\" --params \"{}\" --wait >/dev/null 2>&1\n  " + runOp
+        runOp = "/usr/bin/cliamp remote call \"queue.clear\" --params \"{}\" --wait >/dev/null 2>&1\n  " + runOp
     // must-style insert-next: snapshot the current track (navidrome id when
     // present, else path) and the queue length, append via the op, then move
     // the appended range to right after the current track (ascending moves
@@ -171,7 +171,7 @@ function build(action, row, target, ctx) {
         runOp += "\n  OP_STATUS=$?\n  cliamp remote call \"shuffle\" --params '{\"name\":\"on\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
     var prep = ""
     if (ctx.m3uBody)
-        prep = "mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
+        prep = "/usr/bin/mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "
     var launch
     if (action === "play" && String(ctx.launchTarget || "").length > 0)
         launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play >/dev/null 2>&1 &"
@@ -179,9 +179,9 @@ function build(action, row, target, ctx) {
         // Native provider loads have no path/URL to hand a fresh TUI (e.g.
         // provider.load_album): start it bare and ask for a retry, mirroring
         // the must enqueue fallback. No history (exit 1).
-        launch = "  " + notify("cliamp not running — started it; try again once it's up") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
+        launch = "  " + notify("/usr/bin/cliamp not running — started it; try again once it's up") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     else
-        launch = "  " + notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
+        launch = "  " + notify("/usr/bin/cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     // The m3u (when any) is written before the branch, so a not-running play
     // can launch the TUI directly on the file — cliamp resolves local m3u
     // argv entries itself. Facet paths whose file already exists (sqlite
