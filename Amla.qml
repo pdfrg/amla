@@ -96,7 +96,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0234"
+    readonly property string buildId: "0.5.0236"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -597,21 +597,26 @@ Item {
     }
 
     function runSubM3u(tracks, fallbackAction) {
+        // The file is written before the running/not-running branch, so
+        // a fresh TUI can launch directly on the full list (cliamp
+        // resolves local m3u argv entries itself).
+
         var m = root.subTracksToM3u(tracks);
         if (m.firstUrl.length === 0)
             return ;
 
         var action = root.pendingSubAction || fallbackAction;
+        var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
         root.runCliamp(root.pendingSubRow, action, {
             "op": "url.load",
             "params": {
-                "path": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u",
+                "path": m3u,
                 "play": action === "play"
             },
             "clearFirst": action === "play",
             "insertNext": action === "enqueue-next",
             "m3uBody": m.body,
-            "launchTarget": m.firstUrl
+            "launchTarget": m3u
         });
     }
 

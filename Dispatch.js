@@ -182,5 +182,9 @@ function build(action, row, target, ctx) {
         launch = "  " + notify("cliamp not running — started it; try again once it's up") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
     else
         launch = "  " + notify("cliamp not running — enqueue needs a running player") + "\n  " + LAUNCH + " >/dev/null 2>&1 &\n  exit 1"
-    return "if " + RUNNING + "; then\n  " + prep + runOp + "\nelse\n" + launch + "\nfi"
+    // The m3u (when any) is written before the branch, so a not-running play
+    // can launch the TUI directly on the file — cliamp resolves local m3u
+    // argv entries itself. Facet paths whose file already exists (sqlite
+    // resolve) pass no m3uBody and are unaffected.
+    return prep + "if " + RUNNING + "; then\n  " + runOp + "\nelse\n" + launch + "\nfi"
 }
