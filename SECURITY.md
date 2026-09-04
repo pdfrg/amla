@@ -20,11 +20,15 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
 | `/usr/share/omarchy/bin/omarchy-launch-tui` | launch must/cliamp TUI when the player isn't running (play actions only) | fixed verbs + quoted resolver |
 | `/usr/bin/notify-send` | fallback notices (e.g. "must not running — started it") | static strings only |
+| `/usr/bin/python3 <plugindir>/index-library.py` | background tag scan over the music roots into amla's own `files.db` (mutagen → ffprobe → filename ladder, one run at a time, incremental; no timeout — a cold scan of a huge library runs minutes) | roots passed as argv (visible to same-user `ps`, same residual as below); tags parsed from file bytes, never executed |
+| `ffprobe` (bare name, only if the user installed it) | tag reader rung inside the script above: `-v quiet -print_format json -show_format <path>`, per-file 30 s timeout | **not** absolute-pathed — resolved via `PATH`, so the shell-env residual below applies fully; JSON output parsed, never executed |
 | `/usr/bin/{mkdir,rm,ls,find,sed,sort,wc}` | cache/state dir setup, temp-dir listing, art probing | paths single-quote wrapped |
 
 No `sudo`, `pkexec`, `setcap`, package installs, or privilege escalation of
 any kind. No compiler, downloader, or runtime dependency beyond the table
-plus `jq` (optional, for cliamp insert-next positioning).
+plus `jq` (optional, for cliamp insert-next positioning) and the optional,
+user-installed tag readers `python-mutagen` / `ffmpeg` — amla only detects
+them read-only and never installs anything.
 
 ## Network
 
@@ -37,17 +41,23 @@ plus `jq` (optional, for cliamp insert-next positioning).
 
 ## Files read
 
+- `~/.config/amla/config.json` — own config (`targetPlayer`, `mustBin`,
+  `musicDirs`, `tempDirs`, `bucketWords`, `noiseTokens`, `mpdHost/Port`,
+  `debugNoMust`). Re-read at shell start (external edits need a restart).
+- `~/.config/cliamp/config.toml` — `initial_directory` only, as a music-root hint.
 - `~/.config/must/config.toml` — `music_dirs`, `temp_dirs`, `[subsonic]`
   credentials (re-read on each popup open).
 - `~/.cache/must/library.db` — read-only (`-readonly` flag).
 - must temp dirs + playlist dir — directory listings only.
-- `~/.config/amla/config.json` — own config (`targetPlayer`, `mustBin`).
+- Music roots (audio files) — tag bytes read by the index builder; filenames
+  parsed for artist/album/title on the zero-dependency tier.
 
 ## Files written (all under `$HOME`, all documented with undo)
 
 - `~/.config/amla/config.json` — target-player toggle, atomic write.
 - `~/.local/state/amla/history.json` — play counts / recency for favorites.
 - `~/.cache/amla/art/` — Subsonic cover thumbnails (`size=96`, `Ctrl+R` flushes).
+- `~/.cache/amla/files.db*` — amla-owned file index (songs + FTS5, WAL mode).
 - `$XDG_RUNTIME_DIR/amla/queue.m3u` — staging file for multi-track cliamp dispatch.
 - Nothing under `/usr`, `/etc`, `~/.config/hypr/`, or `~/.config/omarchy/` is
   written by the plugin. (The optional `SUPER+M` keybinding below is a manual
@@ -63,6 +73,8 @@ keybinding line. No services, timers, or daemons are installed.
 - A 3 s MPRIS poll records now-playing metadata into local history only.
 - A one-shot ~10 s post-login pre-warm fetches Subsonic facets + empty-state
   art so the first open is fast. No periodic network polling afterwards.
+- With no must DB present, the first popup open (or pre-warm) also triggers
+  a background `index-library.py` run to build the file index.
 
 ## Known residuals (accepted, documented)
 

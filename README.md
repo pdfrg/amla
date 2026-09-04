@@ -29,6 +29,36 @@ Favorites learn from your play history and surface as you type. Dispatches to
 A Subsonic/Navidrome server is optional — configure it in must and amla
 searches it too; without it amla is local-only and never touches the network.
 
+## Local library: three tiers, zero config
+
+amla keeps its own file index (`~/.cache/amla/files.db`) over your music
+roots: amla's `musicDirs` if set, else cliamp's `initial_directory`, else
+must's `music_dirs`, else `~/Music`. Nothing to set up — open the popup once
+and it builds in the background. What you get depends on what's installed:
+
+| Tier | You have | You get |
+|---|---|---|
+| floor | nothing new | artist / album / song search parsed from file paths (year included when folder names carry it); no genre facets |
+| middle | `sudo pacman -S python-mutagen` | full tags, all facets, fast rescans |
+| full | must, opened once | everything, plus temp dirs, playlists and Subsonic — amla auto-prefers must when its DB is present |
+
+Think of it as an on-ramp: the floor works out of the box, mutagen is the
+no-new-player upgrade, and must remains the recommended destination. amla
+never installs anything itself — it detects what's available, read-only.
+Under the hood the tag reader is a ladder (mutagen → ffprobe → filename
+parsing), picked automatically per scan; incremental rebuilds only touch
+changed files (`Ctrl+R` in the popup forces a full pass).
+
+Verify the index any time:
+
+```sh
+sqlite3 ~/.cache/amla/files.db 'SELECT COUNT(*) FROM files;'
+```
+
+Note: hand-edits to amla's own config (`~/.config/amla/config.json` — roots,
+flags) need `omarchy restart shell` to take effect; reopening the popup is
+not enough, because Quickshell doesn't notice external file changes.
+
 Standard tools used under the hood: `sqlite3`, `curl`, `notify-send`
 (`jq` optional, improves cliamp play-next positioning).
 
@@ -48,6 +78,69 @@ o.bind("SUPER + M", "Amla", "omarchy-shell shell toggle io.github.pdfrg.amla")
 
 and check `hyprctl configerrors` is clean. To update: `omarchy plugin update
 io.github.pdfrg.amla` (or pull + reinstall from source).
+
+Finally, point amla at your music collection. It looks in four places, in
+order: amla's own `musicDirs`, cliamp's `initial_directory`, must's
+`music_dirs`, then `~/Music`. If any of those already covers your library —
+the common case is music straight in `~/Music` — skip this entirely.
+
+Note most cliamp configs don't set `initial_directory` at all (it's just the
+file-browser start dir), so for a cliamp-only setup with music elsewhere the
+player-independent way is amla's own config (`~/.config/amla/config.json`):
+
+```json
+{
+  "targetPlayer": "cliamp",
+  "musicDirs": ["~/Music", "/mnt/music"],
+  "tempDirs": ["~/Downloads"]
+}
+```
+
+then `omarchy restart shell` (hand-edits need a restart — see above). The
+same file takes `mustBin`, `bucketWords`, `noiseTokens`, `mpdHost`/`mpdPort`
+overrides; `Ctrl+T` in the popup flips `targetPlayer` for you.
+
+Player configs that also feed the chain:
+
+`omarchy-launch-editor --inline /home/$USER/.config/cliamp/config.toml`
+
+```
+# customize for your setup
+
+[navidrome]
+url      = "http://192.168.1.XYZ:4533"
+user     = "your_user"
+password = "your_password"
+```
+For must:
+
+`omarchy-launch-editor --inline /home/$USER/.config/must/config.toml`
+
+```
+# Your local music library
+# format: comma-separated quoted paths inside brackets, e.g. ["~/Music", "/mnt/music"]
+music_dirs = ['~/Music']
+
+# directories containing temp/download albums (each subfolder = one album)
+# format: comma-separated quoted paths inside brackets, e.g. ["~/Downloads", "/tmp/music"]
+# press T in the TUI to browse (default: [])
+temp_dirs = ['/mnt/downloads/music']
+
+# Subsonic-compatible server client (Navidrome, Jellyfin, etc.)
+[subsonic]
+# enable Subsonic-compatible server client (default: false)
+enabled = true
+# Subsonic server base URL (e.g., http://navidrome.local:4533)
+url = 'http://192.168.1.XYZ:4533'
+# Subsonic username
+username = 'your_user'
+# Subsonic password or hex-encoded token
+password = 'your_password'
+# display name for the server (default: Subsonic)
+server_name = 'Navidrome'
+# 2-char badge shown next to remote tracks (default: S)
+server_badge = 'N'
+```
 
 ## Keys
 
@@ -70,6 +163,8 @@ io.github.pdfrg.amla` (or pull + reinstall from source).
   launcher plays + MPRIS now-playing)
 - Subsonic cover cache: `~/.cache/amla/art/` (`Ctrl+R` flushes)
 - Plugin config: `~/.config/amla/config.json` (`targetPlayer`, `mustBin` override)
+  — hand-edits need `omarchy restart shell` (see above)
+- amla's file index: `~/.cache/amla/files.db` (songs, WAL + FTS5)
 - must's library DB is read-only: `~/.cache/must/library.db` (FTS5)
 - `scripts/warm-art-cache.sh` is optional: it pre-downloads all Navidrome
   covers into `~/.cache/amla/art` so browsing never waits on the network —
@@ -95,7 +190,8 @@ services, timers, or daemons are installed, so nothing else lingers.
 
 ## Credits
 
-Search-palette concept inspired by [Launchy](https://www.launchy.net).
+- Search-palette concept inspired by [Launchy](https://www.launchy.net).
+- [Omarchy Black Turq theme](https://github.com/HANCORE-linux/omarchy-blackturq-theme) used in screenshots.
 
 ## License
 
