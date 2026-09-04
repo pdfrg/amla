@@ -307,7 +307,7 @@ function facetRows(genres, years, q) {
       kind: "genre",
       badge: "",
       title: String(genres[j].g),
-      subtitle: "genre · " + genres[j].n + " track" + (genres[j].n === 1 ? "" : "s")
+      subtitle: "genre · " + genres[j].n + " album" + (genres[j].n === 1 ? "" : "s")
     }
     if (gl === query)
       exact.push(grow)

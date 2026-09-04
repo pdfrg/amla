@@ -111,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0426"
+    readonly property string buildId: "0.5.1931"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -498,16 +498,58 @@ Item {
                 }
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                 var su = Subsonic.streamUrl(root.sub.url, auth, row.id);
-                runCliamp(row, action, {
-                    "op": "url.load",
+                // Full supplied track (not a bare URL): stream URLs carry
+                // no tags, so url.load shows the host as title and no
+                // duration (cliamp, unlike rmpc, never refreshes stream
+                // metadata at play time). duration_secs also clears the
+                // realtime flag m3u/url loads set when duration <= 0.
+                var meta = {
+                };
+                if (row.id && String(row.id).length > 0)
+                    meta["navidrome.id"] = String(row.id);
+
+                var str = {
+                    "path": su,
+                    "title": row.titleField || row.title,
+                    "artist": row.artist || "",
+                    "album": row.album || "",
+                    "duration_secs": row.duration || 0,
+                    "provider_meta": meta
+                };
+                if (action === "play" || action === "playshuffle") {
+                    runCliamp(row, action, {
+                    "op": "track.play",
                     "params": {
-                        "path": su,
-                        "play": action === "play"
+                        "track": str
                     },
-                    "clearFirst": action === "play",
-                    "insertNext": action === "enqueue-next",
+                    "clearFirst": true,
                     "launchTarget": su
                 });
+                } else if (action === "enqueue-next") {
+                    runCliamp(row, action, {
+                    "op": "track.queue",
+                    "params": {
+                        "track": str
+                    },
+                    "insertNext": true
+                });
+                } else {
+                    // No append-with-metadata op exists ("queue" takes a
+                    // bare path, "queue.enqueue" takes an index), so
+                    // append goes as a single-entry m3u with a real
+                    // EXTINF duration (not -1, which flags realtime).
+                    var eauth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    var eu = Subsonic.streamUrl(root.sub.url, eauth, row.id);
+                    var em3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+                    runCliamp(row, action, {
+                        "op": "url.load",
+                        "params": {
+                            "path": em3u,
+                            "play": false
+                        },
+                        "m3uBody": "#EXTM3U\n#EXTINF:" + (row.duration || 0) + "," + (row.artist || "") + " - " + (row.titleField || row.title) + "\n" + eu + "\n"
+                    });
+                }
                 return ;
             }
             if (row.kind === "song") {
@@ -635,7 +677,8 @@ Item {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
             var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
             urls.push(u);
-            body += "#EXTINF:-1," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
+            var dur = t.duration || t.durationSecs || 0;
+            body += "#EXTINF:" + dur + "," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
         }
         return {
             "body": body,
@@ -1292,7 +1335,7 @@ Item {
 
                 var action = root.pendingSubAction || "enqueue";
                 var body = "#EXTM3U\n";
-                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:-1," + (tracks[j].artist || "") + " - " + (tracks[j].title || "") + "\n" + tracks[j].path + "\n"
+                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:" + (tracks[j].duration || tracks[j].durationSecs || 0) + "," + (tracks[j].artist || "") + " - " + (tracks[j].title || "") + "\n" + tracks[j].path + "\n"
                 var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                 root.runCliamp(root.pendingSubRow, action, {
                     "op": "url.load",
