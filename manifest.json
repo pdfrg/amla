@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "mds.amla",
+  "id": "io.github.pdfrg.amla",
   "name": "Amla",
   "version": "1.0.0",
-  "author": "mds",
+  "author": "pdfrg",
+  "license": "MIT",
   "description": "Searchable music launcher popup: must / cliamp catalog with favorites, thumbnails, and play actions",
   "kinds": ["menu"],
   "entryPoints": {

@@ -99,7 +99,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0258"
+    readonly property string buildId: "0.5.0303"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -113,7 +113,7 @@ Item {
         refreshFacets();
     }
 
-    // IPC freshness probe: omarchy-shell shell call mds.amla buildInfo ""
+    // IPC freshness probe: omarchy-shell shell call io.github.pdfrg.amla buildInfo ""
     function buildInfo() {
         return root.buildId;
     }
