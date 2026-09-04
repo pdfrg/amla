@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0010"
+    readonly property string buildId: "0.5.0011"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -566,6 +566,36 @@ Item {
         mprisPathProc.running = true;
     }
 
+    // Match path-less history items to temp album dirs (client-side, over
+    // the cached listing) so their art resolves; persists artDir on hits.
+    function matchTempArtDirs() {
+        var temps = (root.listing && root.listing.temp) || [];
+        if (temps.length === 0)
+            return ;
+
+        if (History.matchTempDirs(temps) > 0) {
+            historyFile.setText(History.serialize());
+            rebuildDisplay();
+        }
+    }
+
+    // One batched lookup resolving file paths for history items that lack
+    // them (MPRIS records, older entries) so song/album art can resolve.
+    // Subsonic-origin items are skipped (History.itemsMissingPaths): their
+    // art comes from the cover cache, and a local path would change dispatch.
+    function backfillHistoryPaths() {
+        if (backfillPathsProc.running)
+            return ;
+
+        root.matchTempArtDirs();
+        var missing = History.itemsMissingPaths(40);
+        if (missing.length === 0)
+            return ;
+
+        backfillPathsProc.command = ["sqlite3", "-json", "-readonly", root.mustDb, Catalog.backfillPathsSql(missing)];
+        backfillPathsProc.running = true;
+    }
+
     function refreshListings() {
         listingProc.command = ["sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
         listingProc.running = true;
@@ -637,6 +667,7 @@ Item {
         root.lastRecordedMs = now;
         History.recordPlay("song", artist, album, title, title, "");
         historyFile.setText(History.serialize());
+        root.backfillHistoryPaths();
     }
 
     onFilterTextChanged: searchDebounce.restart()
@@ -747,6 +778,7 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 root.listing = Catalog.parseListing(text);
+                root.matchTempArtDirs();
                 root.rebuildDisplay();
             }
         }
@@ -936,6 +968,27 @@ Item {
     }
 
     Process {
+        id: backfillPathsProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var rows = [];
+                try {
+                    rows = JSON.parse(String(text || "[]"));
+                } catch (e) {
+                    return ;
+                }
+                if (History.applyPathBackfill(rows) > 0) {
+                    historyFile.setText(History.serialize());
+                    rebuildDisplay();
+                }
+            }
+        }
+
+    }
+
+    Process {
         id: cliampResolveProc
 
         stdout: StdioCollector {
@@ -1053,6 +1106,7 @@ Item {
         onLoaded: {
             History.load(text());
             rebuildDisplay();
+            backfillHistoryPaths();
         }
     }
 

@@ -18,6 +18,24 @@ function trackPathSql(artist, album, title) {
     " COLLATE NOCASE AND album = " + sqlQuote(album) + " COLLATE NOCASE AND title = " + sqlQuote(title) + " COLLATE NOCASE LIMIT 1"
 }
 
+// One sample track path for an album (art lookup + backfill).
+function albumPathSql(artist, album) {
+  return "SELECT path FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
+    " COLLATE NOCASE AND album = " + sqlQuote(album) + " COLLATE NOCASE LIMIT 1"
+}
+
+// One row per history item lacking a path: {k, path} (path NULL when no
+// local match). Scalar subqueries keep it a single sqlite3 call.
+function backfillPathsSql(items) {
+  var parts = []
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i]
+    var sel = it.type === "album" ? albumPathSql(it.artist, it.album) : trackPathSql(it.artist, it.album, it.title)
+    parts.push("SELECT " + sqlQuote(it.key) + " AS k, (" + sel + ") AS path")
+  }
+  return parts.join(" UNION ALL ")
+}
+
 // FTS5 MATCH expression from raw user input: each whitespace token becomes a
 // quoted prefix term. Quotes stripped; empty input → "" (caller skips SQL).
 function ftsQuery(q) {
@@ -412,18 +430,24 @@ function parseArtOutput(outText) {
 function artDirsFor(row) {
     if (!row)
         return []
+    var out = []
+    // Backfilled temp-album dir (history items whose file is untracked).
+    if (row.artDir)
+        out.push(row.artDir)
     if (row.kind === "artist") {
         var d = row.albumPath || row.path || ""
         if (!d)
-            return []
+            return out
         var albumDir = parentDir(d)
         var artistDir = parentDir(albumDir)
         if (artistDir && artistDir !== albumDir)
-            return [artistDir]
-        return []
+            out.push(artistDir)
+        return out
     }
     var single = artDirFor(row)
-    return single ? [single] : []
+    if (single && out.indexOf(single) < 0)
+        out.push(single)
+    return out
 }
 
 // Directory whose artwork represents a row.

@@ -137,6 +137,78 @@ function scoreOf(it) {
     return score
 }
 
+// History items of local origin (no path, no subsonic id) that need a file
+// path for artwork. Capped so the backfill query stays small.
+function itemsMissingPaths(n) {
+    var out = []
+    var keys = Object.keys(items)
+    for (var i = 0; i < keys.length && out.length < n; i++) {
+        var it = items[keys[i]]
+        if ((it.type !== "song" && it.type !== "album") || it.path || it.subId || it.artDir)
+            continue
+        out.push({
+            "key": keys[i],
+            "type": it.type,
+            "artist": it.artist || "",
+            "album": it.album || "",
+            "title": it.title || ""
+        })
+    }
+    return out
+}
+
+// Backfill query rows ({k, path}) into the store. Returns changed count.
+function applyPathBackfill(rows) {
+    var changed = 0
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i] && rows[i].path && setPath(rows[i].k, rows[i].path))
+            changed++
+    }
+    return changed
+}
+
+function normKey(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+function tempBaseName(p) {
+    var s = String(p || "")
+    var i = s.lastIndexOf("/")
+    return i >= 0 ? s.substring(i + 1) : s
+}
+
+// Match path-less items to temp album dirs ("Artist - YEAR - Album - tags").
+// Dir names sanitize punctuation ("Q: ... A: MTV!" → "Q_ ... A_ MTV!"),
+// so both sides are normalized to [a-z0-9] before containment; requiring
+// artist AND album keeps short names ("Days") from false-matching.
+function matchTempDirs(tempPaths) {
+    var dirs = []
+    for (var d = 0; d < tempPaths.length; d++)
+        dirs.push({
+            "path": tempPaths[d],
+            "norm": normKey(tempBaseName(tempPaths[d]))
+        })
+    var changed = 0
+    var keys = Object.keys(items)
+    for (var i = 0; i < keys.length; i++) {
+        var it = items[keys[i]]
+        if ((it.type !== "song" && it.type !== "album") || it.path || it.subId || it.artDir)
+            continue
+        var a = normKey(it.artist)
+        var alb = normKey(it.album)
+        if (a.length < 3 || alb.length < 4)
+            continue
+        for (var j = 0; j < dirs.length; j++) {
+            if (dirs[j].norm.indexOf(a) >= 0 && dirs[j].norm.indexOf(alb) >= 0) {
+                it.artDir = dirs[j].path
+                changed++
+                break
+            }
+        }
+    }
+    return changed
+}
+
 // Map of key -> item, for rebuild-time scoring.
 function favoriteIndex() {
     return items
@@ -220,6 +292,8 @@ function favoriteRow(it) {
         row.coverArt = it.coverArt || ""
         row.id = it.subId || ""
     }
+    if (it.artDir)
+        row.artDir = it.artDir
     // Album art resolves from a sample track file of that album.
     if (kind === "album")
         row.albumPath = it.path || ""
