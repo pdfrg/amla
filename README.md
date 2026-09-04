@@ -1,4 +1,7 @@
-# <img src="icon.png" width="64" align="left"> amla — advanced music launcher
+<img src="icon.png" width="64" align="left" hspace="12" vspace="6">
+
+# amla — advanced music launcher
+<br clear="left">
 
 Searchable music launcher plugin for Omarchy 4 (Quattro): `SUPER + M` opens a popup
 over your catalog — local library, temp/download albums, and Subsonic
