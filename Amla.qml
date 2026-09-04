@@ -111,10 +111,14 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1931"
+    readonly property string buildId: "0.5.1948"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
+    // Cold subsonic-album play retry (P3): set by dispatchSubsonicCliamp
+    // alongside the provider.load_album dispatch; dispatchProc.onExited
+    // consumes it — success clears, failure refires via REST getAlbum.
+    property var pendingFallbackAlbum: null
     // Fire-and-forget file-index build (§13): the script upserts by mtime,
     // so repeats are cheap after the cold scan. No timeout — a huge cold
     // build may run minutes; queries keep serving stale rows meanwhile.
@@ -518,21 +522,21 @@ Item {
                 };
                 if (action === "play" || action === "playshuffle") {
                     runCliamp(row, action, {
-                    "op": "track.play",
-                    "params": {
-                        "track": str
-                    },
-                    "clearFirst": true,
-                    "launchTarget": su
-                });
+                        "op": "track.play",
+                        "params": {
+                            "track": str
+                        },
+                        "clearFirst": true,
+                        "launchTarget": su
+                    });
                 } else if (action === "enqueue-next") {
                     runCliamp(row, action, {
-                    "op": "track.queue",
-                    "params": {
-                        "track": str
-                    },
-                    "insertNext": true
-                });
+                        "op": "track.queue",
+                        "params": {
+                            "track": str
+                        },
+                        "insertNext": true
+                    });
                 } else {
                     // No append-with-metadata op exists ("queue" takes a
                     // bare path, "queue.enqueue" takes an index), so
@@ -710,14 +714,19 @@ Item {
     function dispatchSubsonicCliamp(row, action) {
         if (row.kind === "subsonic-album" && action === "play" && row.id && String(row.id).length > 0) {
             // Native provider load: replaces the live playlist and starts
-            // playback in one call (no REST round-trip, no m3u). Enqueue
-            // paths still resolve track URLs (album_tracks proc below).
+            // playback in one call (no REST round-trip, no m3u). Cold
+            // (stopped player) it cannot work — the script exits quietly
+            // (coldSilent) and dispatchProc's onExited retries via REST
+            // getAlbum → stream-URL m3u → TUI launch on the file, so the
+            // player opens with music instead of an empty queue + retry.
+            pendingFallbackAlbum = row;
             runCliamp(row, action, {
                 "op": "provider.load_album",
                 "params": {
                     "provider": "navidrome",
                     "album": row.id
-                }
+                },
+                "coldSilent": true
             });
             return ;
         }
@@ -782,6 +791,32 @@ Item {
             subCliampTracksProc.command = ["/usr/bin/sh", "-c", "/usr/bin/cliamp remote call \"$AMLA_POP\" --params \"$AMLA_PPARAMS\" --wait"];
             subCliampTracksProc.running = true;
         }
+    }
+
+    // Provider-op fallback (P3): subCliampTracksProc reached no daemon.
+    // Re-resolve the same row over plain REST, then runSubM3u dispatches
+    // a stream-URL m3u — which plays cold (TUI launch on the file) or
+    // notifies "needs running" for enqueue, exactly like local rows.
+    function subProviderFallback() {
+        var row = root.pendingSubRow;
+        if (!row || subFallbackProc.running)
+            return ;
+
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        var url = "";
+        if (row.kind === "subsonic-album" && row.id) {
+            url = Subsonic.albumTracksUrl(root.sub.url, auth, row.id);
+        } else if (row.kind === "subsonic-artist") {
+            url = Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100);
+        } else {
+            var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
+            url = Subsonic.songsSearchUrl(root.sub.url, auth, q, 100);
+        }
+        if (!url)
+            return ;
+
+        subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", url];
+        subFallbackProc.running = true;
     }
 
     // One indexed lookup per new MPRIS track: backfill the file path the
@@ -1274,14 +1309,14 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
-                var albums = Subsonic.yearAlbums(sub).slice(0, 40);
+                var albums = Subsonic.yearAlbums(sub).slice(0, 100);
                 if (albums.length === 0)
                     return ;
 
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                 var parts = [];
                 for (var i = 0; i < albums.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, albums[i].id) + "'; echo ---AMLAYEAR---")
-                subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join(" ")];
+                subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join("; ")];
                 subYearExpandProc.running = true;
             }
         }
@@ -1328,11 +1363,17 @@ Item {
 
                     }
                 } catch (e) {
+                    // Daemon down (or any non-JSON reply): the provider op
+                    // never reached a player — retry via plain REST below
+                    // instead of failing silently (fixes.txt notes 2/3: no
+                    // playback AND no "needs running" notification).
+                    root.subProviderFallback();
                     return ;
                 }
-                if (tracks.length === 0)
+                if (tracks.length === 0) {
+                    root.subProviderFallback();
                     return ;
-
+                }
                 var action = root.pendingSubAction || "enqueue";
                 var body = "#EXTM3U\n";
                 for (var j = 0; j < tracks.length; j++) body += "#EXTINF:" + (tracks[j].duration || tracks[j].durationSecs || 0) + "," + (tracks[j].artist || "") + " - " + (tracks[j].title || "") + "\n" + tracks[j].path + "\n"
@@ -1348,6 +1389,31 @@ Item {
                     "m3uBody": body,
                     "launchTarget": tracks[0].path
                 });
+            }
+        }
+
+    }
+
+    // Plain-REST retry for provider ops that reached no daemon (P3) and
+    // for cold provider.load_album (via dispatchProc.onExited). Shapes
+    // Navidrome children, then the shared m3u dispatch (cold plays via
+    // TUI launch on the file; cold enqueue notifies like local rows).
+    Process {
+        id: subFallbackProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var row = root.pendingSubRow;
+                if (!row)
+                    return ;
+
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var tracks = row.kind === "subsonic-album" ? Subsonic.albumSongs(sub) : Subsonic.searchSongs(sub);
+                if (tracks.length === 0)
+                    return ;
+
+                root.runSubM3u(tracks, "enqueue");
             }
         }
 
@@ -1457,6 +1523,18 @@ Item {
         property var hist: null
 
         onExited: function(exitCode) {
+            // Cold provider.load_album never reaches a player: retry the
+            // album via REST (stream-URL m3u → TUI launch on the file).
+            var fb = root.pendingFallbackAlbum;
+            root.pendingFallbackAlbum = null;
+            if (exitCode !== 0 && fb) {
+                root.pendingSubAction = "play";
+                root.pendingSubRow = fb;
+                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, fb.id)];
+                subFallbackProc.running = true;
+                return ;
+            }
             if (exitCode !== 0 || !dispatchProc.hist)
                 return ;
 

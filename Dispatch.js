@@ -196,7 +196,13 @@ function build(action, row, target, ctx) {
     if (action === "play" && String(ctx.launchTarget || "").length > 0)
         // --no-shuffle: cold launch must not inherit persisted shuffle=on
         // from config.toml (see shuffleOffAfter above for the running case).
-        launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play --no-shuffle >/dev/null 2>&1 &"
+        // Cold playshuffle (ctx.shuffleAfter) launches shuffled instead.
+        launch = "  " + LAUNCH + " " + shq(String(ctx.launchTarget || "")) + " --auto-play " + (ctx.shuffleAfter ? "--shuffle" : "--no-shuffle") + " >/dev/null 2>&1 &"
+    else if (action === "play" && ctx.coldSilent)
+        // Caller handles the cold case itself (QML fallback fetching
+        // playable material first): fail quietly so no bare player
+        // opens and no misleading notification fires before the retry.
+        launch = "  exit 1"
     else if (action === "play")
         // Native provider loads have no path/URL to hand a fresh TUI (e.g.
         // provider.load_album): start it bare and ask for a retry, mirroring

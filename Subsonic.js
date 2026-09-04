@@ -61,11 +61,25 @@ function albumTracksUrl(baseUrl, auth, albumId) {
     return apiUrl(baseUrl, "getAlbum", auth + "&id=" + encodeURIComponent(String(albumId || "")))
 }
 
+// search3 song-only lookup (provider-op fallback, backfill-style).
+function songsSearchUrl(baseUrl, auth, query, count) {
+    return apiUrl(baseUrl, "search3", auth +
+        "&query=" + encodeURIComponent(String(query || "")) +
+        "&artistCount=0&albumCount=0&songCount=" + (count || 100))
+}
+
 // getSongsByGenre → song children for m3u building.
 function genreSongs(sub) {
     if (!sub || !sub.songsByGenre || !sub.songsByGenre.song)
         return []
     return sub.songsByGenre.song
+}
+
+// search3 response → raw song children for m3u building.
+function searchSongs(sub) {
+    if (!sub || !sub.searchResult3 || !sub.searchResult3.song)
+        return []
+    return sub.searchResult3.song
 }
 
 // getAlbumList2 → album entries for year expansion.
