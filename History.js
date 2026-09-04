@@ -209,6 +209,19 @@ function matchTempDirs(tempPaths) {
     return changed
 }
 
+// Attach a subsonic identity found by the server backfill. Flips the row
+// to its subsonic kind (art via cover cache); song dispatch needs must's
+// subsonic:song: case (see MUST_HANDOFF), album dispatch works today.
+function setSubId(key, subId, coverArt) {
+    var it = items[key]
+    if (!it || !subId || it.subId === subId)
+        return false
+    it.subId = subId
+    if (coverArt)
+        it.coverArt = coverArt
+    return true
+}
+
 // Map of key -> item, for rebuild-time scoring.
 function favoriteIndex() {
     return items

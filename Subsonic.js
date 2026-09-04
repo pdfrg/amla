@@ -51,6 +51,58 @@ function randomAlbumUrl(baseUrl, auth) {
     return apiUrl(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
 }
 
+// History backfill: identify an origin-less favorite on the server so its
+// cover (and subsonic dispatch identity) resolves. One lookup per item;
+// the QML side caps items per run.
+function backfillSongUrl(baseUrl, auth, artist, title) {
+    return apiUrl(baseUrl, "search3", auth +
+        "&query=" + encodeURIComponent(String(artist || "") + " " + String(title || "")) +
+        "&artistCount=0&albumCount=0&songCount=5")
+}
+
+function backfillAlbumUrl(baseUrl, auth, artist, album) {
+    return apiUrl(baseUrl, "search3", auth +
+        "&query=" + encodeURIComponent(String(artist || "") + " " + String(album || "")) +
+        "&artistCount=0&albumCount=3&songCount=0")
+}
+
+function normId(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+// First song whose normalized title exactly matches (strict: avoids
+// attaching a wrong identity to stale local entries).
+function songIdMatch(sub, normTitle) {
+    var songs = (sub && sub.searchResult3 && sub.searchResult3.song) || []
+    var want = String(normTitle || "")
+    if (want.length === 0)
+        return null
+    for (var i = 0; i < songs.length; i++) {
+        if (normId(songs[i].title) === want)
+            return {
+                "id": songs[i].id || "",
+                "coverArt": songs[i].coverArt || ""
+            }
+    }
+    return null
+}
+
+// First album whose normalized name exactly matches.
+function albumIdMatch(sub, normAlbum) {
+    var albums = (sub && sub.searchResult3 && sub.searchResult3.album) || []
+    var want = String(normAlbum || "")
+    if (want.length === 0)
+        return null
+    for (var j = 0; j < albums.length; j++) {
+        if (normId(albums[j].name) === want)
+            return {
+                "id": albums[j].id || "",
+                "coverArt": albums[j].coverArt || ""
+            }
+    }
+    return null
+}
+
 function coverArtUrl(baseUrl, auth, coverArtId, size) {
     return apiUrl(baseUrl, "getCoverArt", auth +
         "&id=" + encodeURIComponent(String(coverArtId || "")) +

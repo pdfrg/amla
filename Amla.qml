@@ -91,7 +91,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0011"
+    readonly property string buildId: "0.5.0012"
     property string pendingSubAction: ""
     property var pendingSubRow: null
 
@@ -583,15 +583,54 @@ Item {
     // them (MPRIS records, older entries) so song/album art can resolve.
     // Subsonic-origin items are skipped (History.itemsMissingPaths): their
     // art comes from the cover cache, and a local path would change dispatch.
+    // Server backfill: identify origin-less leftovers (usually subsonic
+    // tracks must played directly, which MPRIS records without an origin)
+    // so their covers resolve. One search3 per item, 5 per run; strict
+    // exact-title matching, leftovers retry on the next open/record.
+    function pumpSubBackfill() {
+        if (!root.subEnabled || subBackfillProc.running)
+            return ;
+
+        if (!subBackfillProc.queue || subBackfillProc.queue.length === 0) {
+            var missing = History.itemsMissingPaths(40);
+            if (missing.length === 0)
+                return ;
+
+            var q = [];
+            for (var i = 0; i < missing.length && q.length < 5; i++) {
+                var m = missing[i];
+                q.push({
+                    "key": m.key,
+                    "stype": m.type,
+                    "artist": m.artist,
+                    "album": m.album,
+                    "title": m.title,
+                    "norm": History.normKey(m.type === "album" ? m.album : m.title)
+                });
+            }
+            if (q.length === 0)
+                return ;
+
+            subBackfillProc.queue = q;
+        }
+        var next = subBackfillProc.queue.shift();
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        subBackfillProc.current = next;
+        var url = next.stype === "album" ? Subsonic.backfillAlbumUrl(root.sub.url, auth, next.artist, next.album) : Subsonic.backfillSongUrl(root.sub.url, auth, next.artist, next.title);
+        subBackfillProc.command = ["curl", "-s", "--max-time", "5", url];
+        subBackfillProc.running = true;
+    }
+
     function backfillHistoryPaths() {
         if (backfillPathsProc.running)
             return ;
 
         root.matchTempArtDirs();
         var missing = History.itemsMissingPaths(40);
-        if (missing.length === 0)
+        if (missing.length === 0) {
+            root.pumpSubBackfill();
             return ;
-
+        }
         backfillPathsProc.command = ["sqlite3", "-json", "-readonly", root.mustDb, Catalog.backfillPathsSql(missing)];
         backfillPathsProc.running = true;
     }
@@ -968,6 +1007,31 @@ Item {
     }
 
     Process {
+        id: subBackfillProc
+
+        property var queue: []
+        property var current: null
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var item = subBackfillProc.current;
+                subBackfillProc.current = null;
+                if (item) {
+                    var sub = Subsonic.getSubsonic(String(text || ""));
+                    var found = item.stype === "album" ? (sub && Subsonic.albumIdMatch(sub, item.norm)) : (sub && Subsonic.songIdMatch(sub, item.norm));
+                    if (found && found.id && History.setSubId(item.key, found.id, found.coverArt)) {
+                        historyFile.setText(History.serialize());
+                        rebuildDisplay();
+                    }
+                }
+                root.pumpSubBackfill();
+            }
+        }
+
+    }
+
+    Process {
         id: backfillPathsProc
 
         stdout: StdioCollector {
@@ -983,6 +1047,7 @@ Item {
                     historyFile.setText(History.serialize());
                     rebuildDisplay();
                 }
+                root.pumpSubBackfill();
             }
         }
 
