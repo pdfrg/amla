@@ -119,8 +119,12 @@ function facetSql() {
     "SELECT year AS y, COUNT(DISTINCT album) AS n FROM tracks WHERE year > 0 GROUP BY year ORDER BY year;"
 }
 
-// Temp albums + playlists in one shell pass. T<path> and P<path> lines.
-function listingCommand(tempDirs, playlistDir) {
+// Temp albums + playlists + library dirs in one shell pass.
+// T<path>, P<path> and L<path> lines. Library dirs are depth 1-2 under
+// each music root (covers flat "Artist - Album" and nested
+// "Artist/Album" layouts); bucket dirs are harmless — they play the
+// whole subtree via url.load, and the file index supersedes them later.
+function listingCommand(tempDirs, playlistDir, musicDirs) {
   var dirs = []
   for (var i = 0; i < tempDirs.length; i++)
     dirs.push(String(tempDirs[i]).replace(/'/g, "'\\''"))
@@ -130,6 +134,12 @@ function listingCommand(tempDirs, playlistDir) {
   }
   if (playlistDir)
     cmd += "/usr/bin/ls -1 '" + String(playlistDir).replace(/'/g, "'\\''") + "'/*.m3u 2>/dev/null | /usr/bin/sed 's/^/P/';"
+  var roots = []
+  for (var k = 0; k < (musicDirs || []).length; k++)
+    roots.push(String(musicDirs[k]).replace(/'/g, "'\\''"))
+  for (var m = 0; m < roots.length; m++) {
+    cmd += "/usr/bin/find '" + roots[m] + "' -mindepth 1 -maxdepth 2 -type d -print 2>/dev/null | /usr/bin/sed 's/^/L/' | /usr/bin/sort -f;"
+  }
   return cmd
 }
 
@@ -205,10 +215,12 @@ JsonDecoder.prototype.nextArray = function () {
   return null
 }
 
-// listingCommand output → { temp: [paths], playlists: [paths] }
+// listingCommand output → { temp: [paths], playlists: [paths],
+// library: [paths] }
 function parseListing(out) {
   var temp = []
   var playlists = []
+  var library = []
   var lines = String(out || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i]
@@ -220,8 +232,10 @@ function parseListing(out) {
       temp.push(p)
     else if (tag === "P")
       playlists.push(p)
+    else if (tag === "L")
+      library.push(p)
   }
-  return { temp: temp, playlists: playlists }
+  return { temp: temp, playlists: playlists, library: library }
 }
 
 // Cached facets (from facetSql) filtered by query → genre/year/decade rows.
@@ -324,7 +338,7 @@ function localDbRows(sqlRows) {
 // Playlists + temp albums from the cached directory listing. Call exactly
 // once per rebuild -- localDbRows never includes these, so the two compose
 // without duplicating (previously both came from one function called twice).
-function listingRows(listing, q) {
+function listingRows(listing, q, includeLibrary) {
   var query = String(q || "").toLowerCase()
   var rows = []
   for (var i = 0; i < listing.playlists.length; i++) {
@@ -352,6 +366,24 @@ function listingRows(listing, q) {
         path: tp
       })
   }
+  // Dir-level library rows (§11): shown only while the must DB is
+  // unavailable — the file index (later) and the DB (when present)
+  // supersede them. Favorites unify with temp (History maps both).
+  if (includeLibrary) {
+    var libs = listing.library || []
+    for (var l = 0; l < libs.length; l++) {
+      var lp = libs[l]
+      var lname = basename(lp)
+      if (query.length === 0 || lname.toLowerCase().indexOf(query) >= 0)
+        rows.push({
+          kind: "library",
+          badge: "",
+          title: lname,
+          subtitle: "folder · " + basename(parentDir(lp)),
+          path: lp
+        })
+    }
+  }
   return rows
 }
 
@@ -364,6 +396,7 @@ var TIER_ORDER = {
   decade: 5,
   playlist: 6,
   temp: 7,
+  library: 7,
   "subsonic-artist": 8,
   "subsonic-album": 9,
   "subsonic-song": 10,
@@ -474,6 +507,7 @@ function artDirFor(row) {
     case "subsonic-song":
         return row.path ? parentDir(row.path) : (row.albumPath || "")
     case "temp":
+    case "library":
         return row.path || ""
     case "artist":
         if (!row.albumPath && !row.path)
@@ -505,4 +539,27 @@ function subArtCacheFile(coverArtId, cacheDir) {
         return ""
     var safe = id.replace(/[^A-Za-z0-9_-]/g, "_")
     return cacheDir + "/" + safe + "-96.jpg"
+}
+
+// amla-owned file index (§13): same columns as the must queries plus
+// mtime (incremental refresh) and source ('file' now, 'mpd' later per
+// §18 — the old Go amla's trick, so mpd sync needs no migration).
+function filesDbSchema() {
+    return "CREATE TABLE IF NOT EXISTS files" +
+        "(path TEXT PRIMARY KEY, title TEXT DEFAULT '', artist TEXT DEFAULT '', album TEXT DEFAULT '', " +
+        "album_artist TEXT DEFAULT '', year INTEGER DEFAULT 0, genre TEXT DEFAULT '', " +
+        "track_num INTEGER DEFAULT 0, duration INTEGER DEFAULT 0, mtime INTEGER DEFAULT 0, source TEXT DEFAULT 'file');" +
+        "CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5" +
+        "(title, artist, album, album_artist, genre, content='files', content_rowid='rowid');" +
+        "CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN " +
+        "INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre) " +
+        "VALUES (new.rowid, new.title, new.artist, new.album, new.album_artist, new.genre); END;" +
+        "CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN " +
+        "INSERT INTO files_fts(files_fts, rowid, title, artist, album, album_artist, genre) " +
+        "VALUES ('delete', old.rowid, old.title, old.artist, old.album, old.album_artist, old.genre); END;" +
+        "CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN " +
+        "INSERT INTO files_fts(files_fts, rowid, title, artist, album, album_artist, genre) " +
+        "VALUES ('delete', old.rowid, old.title, old.artist, old.album, old.album_artist, old.genre); " +
+        "INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre) " +
+        "VALUES (new.rowid, new.title, new.artist, new.album, new.album_artist, new.genre); END;"
 }

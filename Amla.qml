@@ -58,8 +58,19 @@ Item {
     property var facetYears: []
     property var listing: ({
         "temp": [],
-        "playlists": []
+        "playlists": [],
+        "library": []
     })
+    // Effective library roots (§12), recomputed by refreshRoots() whenever
+    // any config file loads. Sticky must-DB signal: library dir rows show
+    // only while the DB is unreachable (file index / DB supersede them).
+    property var libraryRoots: ({
+        "musicDirs": [],
+        "tempDirs": []
+    })
+    property var amlaPluginCfg: null
+    property string cliampInitialDir: ""
+    property bool mustDbOk: true
     property var searchRows: []
     property string searchedQuery: ""
     property var subRows: []
@@ -92,6 +103,7 @@ Item {
     readonly property bool subEnabled: sub.enabled && sub.url.length > 0 && sub.password.length > 0
     property int searchSerial: 0
     property bool searchDirty: false
+    readonly property string filesDb: home + "/.cache/amla/files.db"
     readonly property string mustDb: home + "/.cache/must/library.db"
     readonly property string playlistDir: home + "/.cache/must/playlists"
     readonly property string artCacheDir: home + "/.cache/amla/art"
@@ -99,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.0415"
+    readonly property string buildId: "0.5.0416"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -109,7 +121,7 @@ Item {
         root.filterText = "";
         root.opened = true;
         root.selectedIndex = 0;
-        refreshListings();
+        refreshRoots();
         refreshFacets();
     }
 
@@ -120,9 +132,17 @@ Item {
 
     function toggleTargetPlayer() {
         root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
+        var pc = root.amlaPluginCfg || {
+        };
         pluginConfigFile.setText(Config.serializePluginConfig({
             "targetPlayer": root.targetPlayer,
-            "mustBin": root.pluginMustBin
+            "mustBin": root.pluginMustBin,
+            "musicDirs": pc.musicDirs || [],
+            "tempDirs": pc.tempDirs || [],
+            "bucketWords": pc.bucketWords || [],
+            "noiseTokens": pc.noiseTokens || [],
+            "mpdHost": pc.mpdHost || "",
+            "mpdPort": pc.mpdPort || 0
         }));
     }
 
@@ -180,7 +200,7 @@ Item {
             rows = History.emptyStateRows(root.mustConfig, root.listing);
         } else {
             rows = Catalog.facetRows(root.facetGenres, root.facetYears, q);
-            var cached = Catalog.listingRows(root.listing, q);
+            var cached = Catalog.listingRows(root.listing, q, !root.mustDbOk);
             rows = rows.concat(cached);
             if (root.subEnabled) {
                 var subFacets = Catalog.facetRows(root.subGenres, root.subYears, q);
@@ -269,7 +289,7 @@ Item {
             return ;
         }
         searchProc.query = q;
-        searchProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", root.mustDb, sql];
+        searchProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, sql];
         searchProc.running = true;
         if (root.subEnabled) {
             subSearchProc.query = q;
@@ -377,6 +397,7 @@ Item {
                 "display": row.title
             };
         case "temp":
+        case "library":
             return {
                 "type": "temp",
                 "artist": "",
@@ -446,7 +467,7 @@ Item {
             // Album-granular pick (GROUP BY album/artist): a random track's
             // parent dir can span multiple albums depending on library
             // layout, so resolve the exact album through the facet m3u flow.
-            randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+            randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
             randomAlbumProc.running = true;
             root.cancel();
             return ;
@@ -522,7 +543,7 @@ Item {
                 });
                 return ;
             }
-            if (row.kind === "temp") {
+            if (row.kind === "temp" || row.kind === "library") {
                 runCliamp(row, action, {
                     "op": "url.load",
                     "params": {
@@ -719,7 +740,7 @@ Item {
     // Match path-less history items to temp album dirs (client-side, over
     // the cached listing) so their art resolves; persists artDir on hits.
     function matchTempArtDirs() {
-        var temps = (root.listing && root.listing.temp) || [];
+        var temps = ((root.listing && root.listing.temp) || []).concat((root.listing && root.listing.library) || []);
         if (temps.length === 0)
             return ;
 
@@ -787,13 +808,21 @@ Item {
         backfillPathsProc.running = true;
     }
 
+    // Effective library roots (§12): amla config wins, else cliamp
+    // initial_directory → must music_dirs → ~/Music for music, must
+    // temp_dirs for temp. Recomputed whenever any config file loads.
+    function refreshRoots() {
+        root.libraryRoots = Config.resolveRoots(root.amlaPluginCfg, root.cliampInitialDir, root.mustConfig, root.home);
+        refreshListings();
+    }
+
     function refreshListings() {
-        listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.mustConfig.tempDirs, root.playlistDir)];
+        listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.libraryRoots.tempDirs, root.playlistDir, root.libraryRoots.musicDirs)];
         listingProc.running = true;
     }
 
     function refreshFacets() {
-        facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", root.mustDb, Catalog.facetSql()];
+        facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.facetSql()];
         facetProc.running = true;
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
@@ -944,6 +973,9 @@ Item {
         property string query: ""
 
         onExited: {
+            // -readonly keeps a missing DB from being created as an empty
+            // file; a nonzero exit means must is absent → library dir rows.
+            root.mustDbOk = searchProc.exitCode === 0;
             if (root.searchDirty) {
                 root.searchDirty = false;
                 root.requestSearch();
@@ -1056,7 +1088,7 @@ Item {
                     // subsonic requests stay silent — nothing else applies.
                     if (root.randomFallbackLocal) {
                         root.randomFallbackLocal = false;
-                        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+                        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
                         randomAlbumProc.running = true;
                     }
                     return ;
@@ -1320,6 +1352,10 @@ Item {
     Process {
         id: facetProc
 
+        onExited: {
+            root.mustDbOk = facetProc.exitCode === 0;
+        }
+
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
@@ -1344,6 +1380,31 @@ Item {
         running: true
     }
 
+    // amla-owned file index (§13): schema created idempotently at startup;
+    // the tag builder (later slice) only ever INSERTs into it.
+    Process {
+        id: filesDbSetup
+
+        environment: {
+            "AMLA_DB": root.filesDb,
+            "AMLA_SCHEMA": Catalog.filesDbSchema()
+        }
+        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${AMLA_DB%/*}\" && /usr/bin/sqlite3 \"$AMLA_DB\" \"$AMLA_SCHEMA\""]
+        running: true
+    }
+
+    FileView {
+        id: cliampConfigFile
+
+        path: root.home + "/.config/cliamp/config.toml"
+        watchChanges: true
+        printErrors: false
+        onLoaded: {
+            root.cliampInitialDir = Config.parseCliampConfig(text(), root.home).initialDirectory;
+            refreshRoots();
+        }
+    }
+
     FileView {
         id: mustConfigFile
 
@@ -1352,7 +1413,7 @@ Item {
         printErrors: false
         onLoaded: {
             root.mustConfig = Config.mustConfig(text(), root.home);
-            refreshListings();
+            refreshRoots();
             // History may have loaded first while subEnabled was still
             // false — retry the server backfill now that creds exist.
             root.pumpSubBackfill();
@@ -1380,8 +1441,10 @@ Item {
         printErrors: false
         onLoaded: {
             var pc = Config.parsePluginConfig(text());
+            root.amlaPluginCfg = pc;
             root.targetPlayer = pc.targetPlayer;
             root.pluginMustBin = pc.mustBin || "";
+            refreshRoots();
         }
     }
 

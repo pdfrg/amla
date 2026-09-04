@@ -131,18 +131,86 @@ function mustConfig(text, home) {
 }
 
 // amla plugin config (~/.config/amla/config.json).
+// musicDirs/tempDirs override auto-detection when non-empty; bucketWords
+// and noiseTokens extend the path-parser defaults (§14); mpd is reserved
+// for the roadmap (§18) — parsed but unused.
 function parsePluginConfig(text) {
   var obj = {}
   try { obj = JSON.parse(String(text || "{}")) } catch (e) { obj = {} }
   return {
     targetPlayer: obj.targetPlayer === "must" ? "must" : "cliamp",
-    mustBin: obj.mustBin === undefined ? "" : String(obj.mustBin)
+    mustBin: obj.mustBin === undefined ? "" : String(obj.mustBin),
+    musicDirs: Array.isArray(obj.musicDirs) ? obj.musicDirs.map(function (x) { return String(x) }) : [],
+    tempDirs: Array.isArray(obj.tempDirs) ? obj.tempDirs.map(function (x) { return String(x) }) : [],
+    bucketWords: Array.isArray(obj.bucketWords) ? obj.bucketWords.map(function (x) { return String(x) }) : [],
+    noiseTokens: Array.isArray(obj.noiseTokens) ? obj.noiseTokens.map(function (x) { return String(x) }) : [],
+    mpdHost: obj.mpdHost === undefined ? "" : String(obj.mpdHost),
+    mpdPort: obj.mpdPort === undefined ? 0 : (parseInt(obj.mpdPort, 10) || 0)
   }
 }
 
 function serializePluginConfig(cfg) {
   return JSON.stringify({
     targetPlayer: cfg.targetPlayer,
-    mustBin: cfg.mustBin || ""
+    mustBin: cfg.mustBin || "",
+    musicDirs: cfg.musicDirs || [],
+    tempDirs: cfg.tempDirs || [],
+    bucketWords: cfg.bucketWords || [],
+    noiseTokens: cfg.noiseTokens || [],
+    mpdHost: cfg.mpdHost || "",
+    mpdPort: cfg.mpdPort || 0
   }, null, 2) + "\n"
+}
+
+// cliamp config.toml → the bits amla needs. Only initial_directory (file
+// browser start dir) doubles as a music-root hint; everything else in the
+// file is ignored. Missing/unset → "".
+function parseCliampConfig(text, home) {
+  var parsed = parseToml(text)
+  var raw = parsed.root["initial_directory"]
+  var dir = String(raw === undefined || raw === null ? "" : (Array.isArray(raw) ? raw[0] || "" : raw)).trim()
+  if (dir.length === 0)
+    return { initialDirectory: "" }
+  return { initialDirectory: expandTilde(dir, home) }
+}
+
+// Effective library roots (§12). amla-owned config wins; otherwise music
+// falls back cliamp initial_directory → must music_dirs (default ~/Music),
+// temp falls back to must temp_dirs. Duplicates and empties removed.
+function resolveRoots(pluginCfg, cliampInitialDir, mustCfg, home) {
+  var music = []
+  var temp = []
+  var seen = {}
+  var push = function (arr, p) {
+    var s = String(p || "").trim()
+    if (s.indexOf("~/") === 0)
+      s = expandTilde(s, home)
+    if (s.length === 0 || seen[s])
+      return
+    seen[s] = true
+    arr.push(s)
+  }
+  var i
+  var pm = (pluginCfg && pluginCfg.musicDirs) || []
+  if (pm.length > 0) {
+    for (i = 0; i < pm.length; i++)
+      push(music, pm[i])
+  } else {
+    if (cliampInitialDir && String(cliampInitialDir).length > 0)
+      push(music, cliampInitialDir)
+    var mm = (mustCfg && mustCfg.musicDirs) || []
+    for (i = 0; i < mm.length; i++)
+      push(music, mm[i])
+  }
+  seen = {}
+  var pt = (pluginCfg && pluginCfg.tempDirs) || []
+  if (pt.length > 0) {
+    for (i = 0; i < pt.length; i++)
+      push(temp, pt[i])
+  } else {
+    var mt = (mustCfg && mustCfg.tempDirs) || []
+    for (i = 0; i < mt.length; i++)
+      push(temp, mt[i])
+  }
+  return { musicDirs: music, tempDirs: temp }
 }

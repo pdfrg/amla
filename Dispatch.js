@@ -52,6 +52,7 @@ function mustResolver(row) {
     case "song":
     case "playlist":
     case "temp":
+    case "library":
         return shq(row.path || row.title || "")
     case "subsonic-song":
         if (row.id && String(row.id).length > 0)
@@ -121,7 +122,7 @@ function build(action, row, target, ctx) {
             // (silent empty playlist). Files/dirs instead go as launch args
             // (loadCLIPaths + --play); prefixed resolvers keep the ctl verb.
             var launchArgs
-            if ((row.kind === "song" || row.kind === "temp") && row.path)
+            if ((row.kind === "song" || row.kind === "temp" || row.kind === "library") && row.path)
                 launchArgs = shq(row.path) + " --play"
             else if (row.kind === "playlist")
                 launchArgs = "play " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, "")) + " --play"
