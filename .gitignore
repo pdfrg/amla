@@ -3,7 +3,8 @@
 # dev-only docs and tooling — never published to the marketplace repo.
 # (Kept on disk locally; untracked. History purged with filter-branch.)
 AGENTS.md
-PLAN.md
-PROGRESS.md
+TODO.md
+NOTES.md
+publishing-notes.md
 project-outline.txt
 scripts/install.sh
