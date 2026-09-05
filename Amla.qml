@@ -116,7 +116,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1553"
+    readonly property string buildId: "0.5.1621"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -637,7 +637,7 @@ Item {
                 pendingSubRow = row;
                 cliampResolveProc.environment = {
                     "AMLA_DB": root.mustDb,
-                    "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row)
+                    "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle")
                 };
                 cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
@@ -709,12 +709,27 @@ Item {
         };
     }
 
+    // Fisher-Yates copy: playshuffle pre-shuffles the material itself
+    // (cliamp target only) because cliamp's shuffle pins the loaded head
+    // at position 0 — without this the first track is always the same.
+    function shuffledCopy(arr) {
+        var a = (arr || []).slice();
+        for (var i = a.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+        }
+        return a;
+    }
+
     function runSubM3u(tracks, fallbackAction) {
-        var m = root.subTracksToM3u(tracks);
+        var action = root.pendingSubAction || fallbackAction;
+        var list = action === "playshuffle" ? root.shuffledCopy(tracks) : tracks;
+        var m = root.subTracksToM3u(list);
         if (m.firstUrl.length === 0)
             return ;
 
-        var action = root.pendingSubAction || fallbackAction;
         var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
         root.runCliamp(root.pendingSubRow, action, {
             "op": "url.load",
@@ -731,6 +746,18 @@ Item {
 
     // cliamp + subsonic album/artist: REST → track list → stream URLs.
     function dispatchSubsonicCliamp(row, action) {
+        if (row.kind === "subsonic-album" && action === "playshuffle" && row.id && String(row.id).length > 0) {
+            // Playshuffle skips the native provider load: cliamp's shuffle
+            // pins the loaded head at position 0, so album track 1 would
+            // always start. REST getAlbum → runSubM3u instead, which
+            // pre-shuffles the m3u (same shape as the cold-play retry).
+            pendingSubAction = action;
+            pendingSubRow = row;
+            var shufAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, shufAuth, row.id)];
+            subFallbackProc.running = true;
+            return ;
+        }
         if (row.kind === "subsonic-album" && action === "play" && row.id && String(row.id).length > 0) {
             // Native provider load: replaces the live playlist and starts
             // playback in one call (no REST round-trip, no m3u). Cold
@@ -1395,8 +1422,10 @@ Item {
 
                 // FileView write (not a shell printf): a ~190 KB command
                 // string never completes under quickshell Process, while
-                // setText has no such ceiling.
-                var m = root.subTracksToM3u(root.yearTracks);
+                // setText has no such ceiling. Playshuffle pre-shuffles
+                // (cliamp pins the loaded head at position 0).
+                var yearList = root.pendingSubAction === "playshuffle" ? root.shuffledCopy(root.yearTracks) : root.yearTracks;
+                var m = root.subTracksToM3u(yearList);
                 if (m.firstUrl.length === 0)
                     return ;
 
@@ -1462,8 +1491,9 @@ Item {
                     return ;
                 }
                 var action = root.pendingSubAction || "enqueue";
+                var ordered = action === "playshuffle" ? root.shuffledCopy(tracks) : tracks;
                 var body = "#EXTM3U\n";
-                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:" + (tracks[j].duration || tracks[j].durationSecs || 0) + "," + Subsonic.m3uTitle(tracks[j].artist, tracks[j].album, tracks[j].title) + "\n" + tracks[j].path + "\n"
+                for (var j = 0; j < ordered.length; j++) body += "#EXTINF:" + (ordered[j].duration || ordered[j].durationSecs || 0) + "," + Subsonic.m3uTitle(ordered[j].artist, ordered[j].album, ordered[j].title) + "\n" + ordered[j].path + "\n"
                 var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                 root.runCliamp(root.pendingSubRow, action, {
                     "op": "url.load",
@@ -1474,7 +1504,7 @@ Item {
                     "clearFirst": action === "play",
                     "insertNext": action === "enqueue-next",
                     "m3uBody": body,
-                    "launchTarget": tracks[0].path
+                    "launchTarget": ordered[0].path
                 });
             }
         }

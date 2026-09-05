@@ -92,24 +92,29 @@ function localSearchSql(q) {
 // Track list for a facet row (cliamp target has no library search): RAW SQL
 // emitting a ready m3u body ("#EXTINF:-1,Artist - Title" + path per track).
 // Passed to sqlite3 via env (no shell quoting); value quotes doubled SQL-side.
-function pathsForKindM3uSql(kind, row) {
+function pathsForKindM3uSql(kind, row, randomOrder) {
     var v = String(row.title || "").replace(/'/g, "''")
+    // Playshuffle pre-shuffles in SQL (cliamp pins the loaded head at
+    // position 0, so deterministic ORDER BY would always start the same
+    // track); plain play keeps album/track order.
+    var albumOrder = randomOrder ? "ORDER BY RANDOM()" : "ORDER BY album, track_num"
+    var trackOrder = randomOrder ? "ORDER BY RANDOM()" : "ORDER BY track_num"
     var inf = "'#EXTINF:-1,' || replace(COALESCE(NULLIF(album_artist,''), artist), char(10), ' ') || ' - ' || replace(album, char(10), ' ') || ' - ' || replace(title, char(10), ' ') || char(10) || path"
     if (kind === "artist")
-        return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
+        return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE " + albumOrder
     if (kind === "album") {
         var a = String(row.artist || "").replace(/'/g, "''")
         var where = "album = '" + v + "' COLLATE NOCASE"
         if (a.length > 0)
             where += " AND COALESCE(NULLIF(album_artist,''), artist) = '" + a + "' COLLATE NOCASE"
-        return "SELECT " + inf + " FROM tracks WHERE " + where + " ORDER BY track_num"
+        return "SELECT " + inf + " FROM tracks WHERE " + where + " " + trackOrder
     }
     if (kind === "genre")
-        return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
+        return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE " + albumOrder
     if (kind === "year")
-        return "SELECT " + inf + " FROM tracks WHERE CAST(year AS TEXT) = '" + v + "' ORDER BY album, track_num"
+        return "SELECT " + inf + " FROM tracks WHERE CAST(year AS TEXT) = '" + v + "' " + albumOrder
     if (kind === "decade")
-        return "SELECT " + inf + " FROM tracks WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " ORDER BY album, track_num"
+        return "SELECT " + inf + " FROM tracks WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " " + albumOrder
     return "SELECT path FROM tracks LIMIT 0"
 }
 
