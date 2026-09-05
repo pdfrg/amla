@@ -120,7 +120,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1706"
+    readonly property string buildId: "0.5.1713"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -1044,14 +1044,18 @@ Item {
             return ;
 
         if (root.debugNoMust()) {
+            // No-must simulation: local facets come from the file index.
+            // Subsonic facets still load when creds exist (e.g. cliamp's
+            // [navidrome]) — a real must-less box with a configured
+            // server has them, so the hook must not suppress them.
             root.mustDbOk = false;
             root.runFilesFacets();
             root.maybeBuildIndex(false, "debug-no-must");
-            return ;
+        } else {
+            facetProc.mode = "must";
+            facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.facetSql()];
+            facetProc.running = true;
         }
-        facetProc.mode = "must";
-        facetProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.facetSql()];
-        facetProc.running = true;
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
             subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'"];
