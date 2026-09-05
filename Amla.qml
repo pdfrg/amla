@@ -111,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2258"
+    readonly property string buildId: "0.5.2333"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -1088,7 +1088,7 @@ Item {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         var parts = [];
         for (var i = 0; i < ids.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, ids[i]) + "'; echo ---AMLAYEAR---")
-        subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join("; ")];
+        subYearExpandProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p '" + root.runtimeDir + "/amla' && " + parts.join("; ")];
         subYearExpandProc.running = true;
     }
 
@@ -1395,30 +1395,31 @@ Item {
                 if (root.yearTracks.length === 0)
                     return ;
 
-                // One bounded write (~200 KB arg): the m3u goes to disk,
-                // then url.load takes the file — never a giant env var.
+                // FileView write (not a shell printf): a ~190 KB command
+                // string never completes under quickshell Process, while
+                // setText has no such ceiling.
                 var m = root.subTracksToM3u(root.yearTracks);
                 if (m.firstUrl.length === 0)
                     return ;
 
-                var file = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
-                subYearWriteProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p " + Dispatch.shq(Quickshell.env("XDG_RUNTIME_DIR") + "/amla") + " && /usr/bin/printf '%s' " + Dispatch.shq(m.body) + " > " + Dispatch.shq(file)];
-                subYearWriteProc.running = true;
+                yearM3uFile.setText(m.body);
             }
         }
 
     }
 
     // Completion of the batched year/decade write: dispatch the file.
-    Process {
-        id: subYearWriteProc
+    // url.load takes the path with no m3uBody (never a giant env var).
+    FileView {
+        id: yearM3uFile
 
-        onExited: function(exitCode) {
-            if (exitCode !== 0)
-                return ;
-
+        path: root.runtimeDir + "/amla/queue.m3u"
+        atomicWrites: true
+        watchChanges: false
+        printErrors: false
+        onSaved: {
             var action = root.pendingSubAction || "enqueue";
-            var file = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+            var file = root.runtimeDir + "/amla/queue.m3u";
             root.runCliamp(root.pendingSubRow, action, {
                 "op": "url.load",
                 "params": {
@@ -1429,6 +1430,9 @@ Item {
                 "insertNext": action === "enqueue-next",
                 "launchTarget": file
             });
+        }
+        onSaveFailed: function(error) {
+            console.log("[amla] year/decade m3u write failed: " + error);
         }
     }
 
