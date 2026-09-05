@@ -97,12 +97,17 @@ function localSearchSql(q) {
 function pathsForKindM3uSql(kind, row, randomOrder, table) {
     var t = table || "tracks"
     var v = String(row.title || "").replace(/'/g, "''")
+    // EXTINF carries real duration but NO title: cliamp takes a wholesale
+    // m3u title literally (no Album field → no album-header grouping),
+    // while an empty title falls through to tag probing, yielding
+    // structured Artist/Album/Title + durations (Q6). Both tables have
+    // a seconds duration column.
     // Playshuffle pre-shuffles in SQL (cliamp pins the loaded head at
     // position 0, so deterministic ORDER BY would always start the same
     // track); plain play keeps album/track order.
     var albumOrder = randomOrder ? "ORDER BY RANDOM()" : "ORDER BY album, track_num"
     var trackOrder = randomOrder ? "ORDER BY RANDOM()" : "ORDER BY track_num"
-    var inf = "'#EXTINF:-1,' || replace(COALESCE(NULLIF(album_artist,''), artist), char(10), ' ') || ' - ' || replace(album, char(10), ' ') || ' - ' || replace(title, char(10), ' ') || char(10) || path"
+    var inf = "'#EXTINF:' || CAST(COALESCE(duration, 0) AS INTEGER) || ',' || char(10) || path"
     if (kind === "artist")
         return "SELECT " + inf + " FROM " + t + " WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE " + albumOrder
     if (kind === "album") {
@@ -369,10 +374,78 @@ function localDbRows(sqlRows) {
   return rows
 }
 
+// §14 temp folder names: "Artist - YYYY - Album - MP3 320k - TAG" →
+// {artist, album, year}. Tag salad (codec, bitrate, source caps-words)
+// is stripped so temp rows render a predictable "Artist - Album";
+// noiseTokens (amla config) extends the built-in strip patterns.
+// Unparseable names fall back to the raw basename.
+function tempNoiseExtra(noiseTokens) {
+  return (noiseTokens || []).map(function (x) { return String(x).toLowerCase() })
+}
+function tempTokenIsNoise(tok, extra) {
+  var t = String(tok || "").trim()
+  if (t.length === 0)
+    return true
+  var low = t.toLowerCase()
+  if (extra && extra.indexOf(low) >= 0)
+    return true
+  if (/mp3|flac|alac|wav|aiff|ogg|vorbis|opus|m4a|aac|kbps|kbit|\b\d+k\b|\bbit\b|khz|lossless|cbr|vbr/i.test(t))
+    return true
+  // Source caps-tags (ENRICH, NICFEIN, SC4R3CR0W): all-caps/digits.
+  // Only consulted past the album slot, so a caps album falls back
+  // to the raw name instead of mis-splitting.
+  if (/^[A-Z0-9]{3,}$/.test(t))
+    return true
+  return false
+}
+function parseTempName(name, noiseTokens) {
+  var raw = String(name || "")
+  var extra = tempNoiseExtra(noiseTokens)
+  var parts = raw.split(/\s+-\s+/)
+  var year = 0
+  var yi = -1
+  for (var i = 0; i < parts.length; i++) {
+    if (/^(19|20)\d\d$/.test(parts[i].trim())) {
+      year = parseInt(parts[i].trim(), 10)
+      yi = i
+      break
+    }
+  }
+  var artist = ""
+  var album = ""
+  if (yi >= 0) {
+    artist = parts.slice(0, yi).join(" - ").trim()
+    for (var j = yi + 1; j < parts.length; j++) {
+      if (!tempTokenIsNoise(parts[j], extra)) {
+        album = parts[j].trim()
+        break
+      }
+    }
+  } else if (parts.length === 2) {
+    artist = parts[0].trim()
+    album = parts[1].trim()
+  } else if (parts.length === 1) {
+    album = parts[0].trim()
+  } else if (parts.length > 2) {
+    artist = parts[0].trim()
+    album = parts.slice(1).join(" - ").trim()
+  }
+  if (!album)
+    return { "artist": "", "album": "", "year": 0, "title": raw }
+  return {
+    "artist": artist,
+    "album": album,
+    "year": year,
+    "title": artist ? artist + " - " + album : album
+  }
+}
+
 // Playlists + temp albums from the cached directory listing. Call exactly
 // once per rebuild -- localDbRows never includes these, so the two compose
 // without duplicating (previously both came from one function called twice).
-function listingRows(listing, q, includeLibrary) {
+// NOTE: dir-level library rows were removed (no-must is the normal mode
+// and the file index supersedes them); temp dirs stay by design.
+function listingRows(listing, q, noiseTokens) {
   var query = String(q || "").toLowerCase()
   var rows = []
   for (var i = 0; i < listing.playlists.length; i++) {
@@ -391,33 +464,25 @@ function listingRows(listing, q, includeLibrary) {
   for (i = 0; i < listing.temp.length; i++) {
     var tp = listing.temp[i]
     var tname = basename(tp)
-    if (query.length === 0 || tname.toLowerCase().indexOf(query) >= 0)
+    if (query.length === 0 || tname.toLowerCase().indexOf(query) >= 0) {
+      // §14: strip tag salad so the row reads "Artist - Album"
+      // (query still matches the raw folder name above).
+      var parsed = parseTempName(tname, noiseTokens)
       rows.push({
         kind: "temp",
         badge: "Temp",
-        title: tname,
-        subtitle: "temp · " + basename(parentDir(tp)),
-        path: tp
+        title: parsed.title,
+        subtitle: "temp · " + basename(parentDir(tp)) + (parsed.year > 0 ? " · " + parsed.year : ""),
+        path: tp,
+        artist: parsed.artist,
+        album: parsed.album,
+        year: parsed.year
       })
-  }
-  // Dir-level library rows (§11): shown only while the must DB is
-  // unavailable — the file index (later) and the DB (when present)
-  // supersede them. Favorites unify with temp (History maps both).
-  if (includeLibrary) {
-    var libs = listing.library || []
-    for (var l = 0; l < libs.length; l++) {
-      var lp = libs[l]
-      var lname = basename(lp)
-      if (query.length === 0 || lname.toLowerCase().indexOf(query) >= 0)
-        rows.push({
-          kind: "library",
-          badge: "",
-          title: lname,
-          subtitle: "folder · " + basename(parentDir(lp)),
-          path: lp
-        })
     }
   }
+  // Dir-level library rows: removed. The file index (facets + search)
+  // covers local browsing with zero must; temp dirs above are the only
+  // folder rows by design.
   return rows
 }
 

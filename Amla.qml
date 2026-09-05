@@ -120,7 +120,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1713"
+    readonly property string buildId: "0.5.1850"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -236,7 +236,7 @@ Item {
             rows = History.emptyStateRows(root.mustConfig, root.listing);
         } else {
             rows = Catalog.facetRows(root.facetGenres, root.facetYears, q);
-            var cached = Catalog.listingRows(root.listing, q, !root.mustDbOk);
+            var cached = Catalog.listingRows(root.listing, q, (root.amlaPluginCfg && root.amlaPluginCfg.noiseTokens) || []);
             rows = rows.concat(cached);
             if (root.subEnabled) {
                 var subFacets = Catalog.facetRows(root.subGenres, root.subYears, q);
@@ -386,6 +386,7 @@ Item {
                 "album": row.album || "",
                 "title": row.titleField || row.title,
                 "display": row.title,
+                "subtitle": row.subtitle || "",
                 "path": row.path || "",
                 "coverArt": row.coverArt || "",
                 "subId": row.id || ""
@@ -398,6 +399,7 @@ Item {
                 "album": row.album || row.title,
                 "title": "",
                 "display": row.title,
+                "subtitle": row.subtitle || "",
                 "path": row.albumPath || "",
                 "coverArt": row.coverArt || "",
                 "subId": row.id || ""
@@ -410,6 +412,7 @@ Item {
                 "album": "",
                 "title": row.title,
                 "display": row.title,
+                "subtitle": row.subtitle || "",
                 "path": row.path || "",
                 "coverArt": row.coverArt || "",
                 "subId": row.id || ""
@@ -421,7 +424,8 @@ Item {
                 "artist": "",
                 "album": "",
                 "title": row.title,
-                "display": row.title
+                "display": row.title,
+                "subtitle": row.subtitle || ""
             };
         case "year":
         case "decade":
@@ -432,7 +436,8 @@ Item {
                 "artist": "",
                 "album": "",
                 "title": row.title,
-                "display": row.title
+                "display": row.title,
+                "subtitle": row.subtitle || ""
             };
         case "temp":
         case "library":
@@ -442,6 +447,7 @@ Item {
                 "album": "",
                 "title": row.title,
                 "display": row.title,
+                "subtitle": row.subtitle || "",
                 "path": row.path || ""
             };
         case "playlist":
@@ -451,6 +457,7 @@ Item {
                 "album": "",
                 "title": row.title,
                 "display": row.title,
+                "subtitle": row.subtitle || "",
                 "path": row.path || ""
             };
         default:
@@ -1121,7 +1128,7 @@ Item {
 
         root.lastRecordedKey = key;
         root.lastRecordedMs = now;
-        History.recordPlay("song", artist, album, title, title, "");
+        History.recordPlay("song", artist, album, title, title, "", null, Catalog.songSubtitle(artist, album, ""));
         historyFile.setText(History.serialize());
         root.backfillHistoryPaths();
     }
@@ -1685,7 +1692,7 @@ Item {
             History.recordPlay(h.type, h.artist, h.album, h.title, h.display, h.path || "", {
                 "coverArt": h.coverArt || "",
                 "subId": h.subId || ""
-            });
+            }, h.subtitle || "");
             historyFile.setText(History.serialize());
             rebuildDisplay();
         }

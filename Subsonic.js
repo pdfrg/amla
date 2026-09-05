@@ -199,11 +199,12 @@ function searchRows(sub, serverName, serverBadge, query) {
         a = artists[i]
         if (String(a.name).toLowerCase().indexOf(q) < 0)
             continue
+        var an = parseInt(a.albumCount, 10) || 0
         out.push({
             "kind": "subsonic-artist",
             "badge": serverBadge,
             "title": String(a.name),
-            "subtitle": (serverName || "Subsonic") + " · artist",
+            "subtitle": (serverName || "Subsonic") + " · artist" + (an > 0 ? " · " + an + " album" + (an === 1 ? "" : "s") : ""),
             "artist": String(a.name),
             "coverArt": a.coverArt || "",
             "id": a.id || ""
@@ -214,11 +215,12 @@ function searchRows(sub, serverName, serverBadge, query) {
         a = albums[i]
         if (String(a.name).toLowerCase().indexOf(q) < 0 && String(a.artist || "").toLowerCase().indexOf(q) < 0)
             continue
+        var sn = parseInt(a.songCount, 10) || 0
         out.push({
             "kind": "subsonic-album",
             "badge": serverBadge,
             "title": String(a.name),
-            "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + " · " + (serverName || "Subsonic"),
+            "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + (sn > 0 ? " · " + sn + " track" + (sn === 1 ? "" : "s") : "") + " · " + (serverName || "Subsonic"),
             "artist": String(a.artist || ""),
             "album": String(a.name),
             "coverArt": a.coverArt || "",
@@ -294,11 +296,12 @@ function randomAlbumRow(sub, serverName, serverBadge) {
     if (!sub || !sub.albumList2 || !sub.albumList2.album || !sub.albumList2.album.length)
         return null
     var a = sub.albumList2.album[0]
+    var sn = parseInt(a.songCount, 10) || 0
     return {
         "kind": "subsonic-album",
         "badge": serverBadge,
         "title": String(a.name || ""),
-        "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + " · " + (serverName || "Subsonic"),
+        "subtitle": String(a.artist || "") + (a.year ? " · " + a.year : "") + (sn > 0 ? " · " + sn + " track" + (sn === 1 ? "" : "s") : "") + " · " + (serverName || "Subsonic"),
         "artist": String(a.artist || ""),
         "album": String(a.name || ""),
         "coverArt": a.coverArt || "",

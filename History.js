@@ -76,7 +76,10 @@ function setPath(key, path) {
     return true
 }
 
-function recordPlay(type, artist, album, title, display, path, extra) {
+function recordPlay(type, artist, album, title, display, path, extra, subtitle) {
+    // Live subtitle snapshot: favorites render exactly like the live row
+    // (plus the star). Refreshed on every play so old thin records
+    // self-heal the next time the item plays.
     // Players sometimes report filename-style "Artist - Title" in the
     // title field; strip the redundant prefix so plays merge under the
     // clean key instead of spawning a parallel record. Only strips when
@@ -102,6 +105,7 @@ function recordPlay(type, artist, album, title, display, path, extra) {
             "album": album || "",
             "title": title || "",
             "display": display || title || album || artist || key,
+            "subtitle": subtitle || "",
             "playCount": 0,
             "lastPlayed": now,
             "path": path || ""
@@ -118,6 +122,11 @@ function recordPlay(type, artist, album, title, display, path, extra) {
         if (extra.subId)
             it.subId = extra.subId
     }
+    // Live rows evolve (counts, years); the stored rendering follows.
+    if (display)
+        it.display = display
+    if (subtitle)
+        it.subtitle = subtitle
     it.playCount = (it.playCount || 0) + 1
     it.lastPlayed = now
     return true
@@ -325,11 +334,15 @@ function favoriteRow(it) {
         "temp": "temp"
     }
     var kind = kindMap[it.type] || "artist"
-    var subtitle = kind
-    if (kind === "song")
-        subtitle = songSubtitle(it.artist, it.album, "")
-    else if (kind === "album" && it.artist)
-        subtitle = it.artist + " · album"
+    // Stored live subtitle first (identical to the live row plus star);
+    // legacy records without one fall back to the lossy construction.
+    var subtitle = it.subtitle || kind
+    if (!it.subtitle) {
+        if (kind === "song")
+            subtitle = songSubtitle(it.artist, it.album, "")
+        else if (kind === "album" && it.artist)
+            subtitle = it.artist + " · album"
+    }
     var row = {
         "kind": kind,
         "badge": "",
