@@ -68,6 +68,22 @@ function songsSearchUrl(baseUrl, auth, query, count) {
         "&artistCount=0&albumCount=0&songCount=" + (count || 100))
 }
 
+// Single-line m3u display title. Newlines stripped (one track per
+// line or the file corrupts); album included — m3u has no split
+// fields, so "Artist - Title" could never show where it came from.
+function m3uTitle(artist, album, title) {
+    var clean = function (s) {
+        return String(s || "").replace(/[\r\n]+/g, " ").trim()
+    }
+    var parts = []
+    if (clean(artist))
+        parts.push(clean(artist))
+    if (clean(album))
+        parts.push(clean(album))
+    parts.push(clean(title))
+    return parts.join(" - ")
+}
+
 // getSongsByGenre → song children for m3u building.
 function genreSongs(sub) {
     if (!sub || !sub.songsByGenre || !sub.songsByGenre.song)

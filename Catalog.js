@@ -94,7 +94,7 @@ function localSearchSql(q) {
 // Passed to sqlite3 via env (no shell quoting); value quotes doubled SQL-side.
 function pathsForKindM3uSql(kind, row) {
     var v = String(row.title || "").replace(/'/g, "''")
-    var inf = "'#EXTINF:-1,' || COALESCE(NULLIF(album_artist,''), artist) || ' - ' || title || char(10) || path"
+    var inf = "'#EXTINF:-1,' || replace(COALESCE(NULLIF(album_artist,''), artist), char(10), ' ') || ' - ' || replace(album, char(10), ' ') || ' - ' || replace(title, char(10), ' ') || char(10) || path"
     if (kind === "artist")
         return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE ORDER BY album, track_num"
     if (kind === "album") {
@@ -115,14 +115,14 @@ function pathsForKindM3uSql(kind, row) {
 
 // Facets: full genre + year lists, fetched once per popup open.
 function facetSql() {
-  return "SELECT genre AS g, COUNT(*) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
+  return "SELECT genre AS g, COUNT(DISTINCT album) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
     "SELECT year AS y, COUNT(DISTINCT album) AS n FROM tracks WHERE year > 0 GROUP BY year ORDER BY year;"
 }
 
 // Facets over the amla file index: same g/y shapes as facetSql so the
 // facetProc handler parses both identically.
 function filesFacetSql() {
-  return "SELECT genre AS g, COUNT(*) AS n FROM files WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
+  return "SELECT genre AS g, COUNT(DISTINCT album) AS n FROM files WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +
     "SELECT year AS y, COUNT(DISTINCT album) AS n FROM files WHERE year > 0 GROUP BY year ORDER BY year;"
 }
 

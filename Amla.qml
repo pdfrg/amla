@@ -111,7 +111,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1948"
+    readonly property string buildId: "0.5.2258"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -119,6 +119,10 @@ Item {
     // alongside the provider.load_album dispatch; dispatchProc.onExited
     // consumes it — success clears, failure refires via REST getAlbum.
     property var pendingFallbackAlbum: null
+    // Batched year/decade expansion state (P1-2nd-pass): remaining album
+    // ids + accumulated minimal track objects across proc runs.
+    property var yearQueue: []
+    property var yearTracks: []
     // Fire-and-forget file-index build (§13): the script upserts by mtime,
     // so repeats are cheap after the cold scan. No timeout — a huge cold
     // build may run minutes; queries keep serving stale rows meanwhile.
@@ -521,13 +525,25 @@ Item {
                     "provider_meta": meta
                 };
                 if (action === "play" || action === "playshuffle") {
+                    // Running: track.play carries split metadata. Cold: the
+                    // TUI launches on a single-entry m3u (a bare stream URL
+                    // shows the host as title) — prep writes it, same shape
+                    // as runSubM3u.
+                    var sm = root.subTracksToM3u([{
+                        "id": row.id,
+                        "artist": row.artist || "",
+                        "album": row.album || "",
+                        "title": row.titleField || row.title,
+                        "duration": row.duration || 0
+                    }]);
                     runCliamp(row, action, {
                         "op": "track.play",
                         "params": {
                             "track": str
                         },
                         "clearFirst": true,
-                        "launchTarget": su
+                        "m3uBody": sm.body,
+                        "launchTarget": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u"
                     });
                 } else if (action === "enqueue-next") {
                     runCliamp(row, action, {
@@ -543,6 +559,7 @@ Item {
                     // append goes as a single-entry m3u with a real
                     // EXTINF duration (not -1, which flags realtime).
                     var eauth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    var ettl = Subsonic.m3uTitle(row.artist, row.album, row.titleField || row.title);
                     var eu = Subsonic.streamUrl(root.sub.url, eauth, row.id);
                     var em3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                     runCliamp(row, action, {
@@ -551,7 +568,7 @@ Item {
                             "path": em3u,
                             "play": false
                         },
-                        "m3uBody": "#EXTM3U\n#EXTINF:" + (row.duration || 0) + "," + (row.artist || "") + " - " + (row.titleField || row.title) + "\n" + eu + "\n"
+                        "m3uBody": "#EXTM3U\n#EXTINF:" + (row.duration || 0) + "," + ettl + "\n" + eu + "\n"
                     });
                 }
                 return ;
@@ -681,8 +698,12 @@ Item {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
             var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
             urls.push(u);
+            // EXTINF carries Artist - Album - Title: m3u has no split
+            // fields (cliamp takes the whole string as Title), and the
+            // real duration (never -1: duration-less URLs flag realtime).
+            var ttl = Subsonic.m3uTitle(t.artist, t.album, t.title);
             var dur = t.duration || t.durationSecs || 0;
-            body += "#EXTINF:" + dur + "," + (t.artist || "") + " - " + (t.title || "") + "\n" + u + "\n";
+            body += "#EXTINF:" + dur + "," + ttl + "\n" + u + "\n";
         }
         return {
             "body": body,
@@ -1056,6 +1077,21 @@ Item {
         root.backfillHistoryPaths();
     }
 
+    // One expansion batch (~12 getAlbum calls): chains the next run from
+    // subYearExpandProc's handler until the queue drains, then the write
+    // proc dispatches the file.
+    function fireYearBatch() {
+        if (root.yearQueue.length === 0)
+            return ;
+
+        var ids = root.yearQueue.splice(0, 12);
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        var parts = [];
+        for (var i = 0; i < ids.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, ids[i]) + "'; echo ---AMLAYEAR---")
+        subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join("; ")];
+        subYearExpandProc.running = true;
+    }
+
     onFilterTextChanged: searchDebounce.restart()
     onDisplayModelChanged: root.selectedIndex = 0
     Component.onCompleted: rebuildDisplay()
@@ -1300,8 +1336,12 @@ Item {
     }
 
     // Year/decade expansion is two hops: album list first, then one getAlbum
-    // per album (capped: a decade can span hundreds). Parts split on
-    // ---AMLAYEAR--- and parse independently so one bad album skips cleanly.
+    // per album. Fetched in small batches (~12 albums, ~200 KB stdout each):
+    // a full decade is ~1.2 MB, which dies somewhere between the QML
+    // stdout collector and the dispatch env handoff while single years
+    // pass through. Accumulated as minimal track objects, then the m3u is
+    // written straight to disk (no giant env var) and url.load takes the
+    // file path — the same file-handoff shape as cliampResolveProc.
     Process {
         id: subYearListProc
 
@@ -1313,11 +1353,10 @@ Item {
                 if (albums.length === 0)
                     return ;
 
-                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                var parts = [];
-                for (var i = 0; i < albums.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, albums[i].id) + "'; echo ---AMLAYEAR---")
-                subYearExpandProc.command = ["/usr/bin/sh", "-c", parts.join("; ")];
-                subYearExpandProc.running = true;
+                root.yearQueue = [];
+                for (var i = 0; i < albums.length; i++) root.yearQueue.push(albums[i].id)
+                root.yearTracks = [];
+                root.fireYearBatch();
             }
         }
 
@@ -1329,7 +1368,6 @@ Item {
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
-                var tracks = [];
                 var chunks = String(text || "").split("---AMLAYEAR---");
                 for (var i = 0; i < chunks.length; i++) {
                     var sub = null;
@@ -1339,12 +1377,59 @@ Item {
                         sub = null;
                     }
                     var songs = Subsonic.albumSongs(sub);
-                    for (var j = 0; j < songs.length; j++) tracks.push(songs[j])
+                    for (var j = 0; j < songs.length; j++) {
+                        var s = songs[j];
+                        root.yearTracks.push({
+                            "id": s.id || "",
+                            "artist": s.artist || "",
+                            "album": s.album || "",
+                            "title": s.title || "",
+                            "duration": s.duration || 0
+                        });
+                    }
                 }
-                root.runSubM3u(tracks, "enqueue");
+                if (root.yearQueue.length > 0) {
+                    root.fireYearBatch();
+                    return ;
+                }
+                if (root.yearTracks.length === 0)
+                    return ;
+
+                // One bounded write (~200 KB arg): the m3u goes to disk,
+                // then url.load takes the file — never a giant env var.
+                var m = root.subTracksToM3u(root.yearTracks);
+                if (m.firstUrl.length === 0)
+                    return ;
+
+                var file = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+                subYearWriteProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p " + Dispatch.shq(Quickshell.env("XDG_RUNTIME_DIR") + "/amla") + " && /usr/bin/printf '%s' " + Dispatch.shq(m.body) + " > " + Dispatch.shq(file)];
+                subYearWriteProc.running = true;
             }
         }
 
+    }
+
+    // Completion of the batched year/decade write: dispatch the file.
+    Process {
+        id: subYearWriteProc
+
+        onExited: function(exitCode) {
+            if (exitCode !== 0)
+                return ;
+
+            var action = root.pendingSubAction || "enqueue";
+            var file = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+            root.runCliamp(root.pendingSubRow, action, {
+                "op": "url.load",
+                "params": {
+                    "path": file,
+                    "play": action === "play"
+                },
+                "clearFirst": action === "play",
+                "insertNext": action === "enqueue-next",
+                "launchTarget": file
+            });
+        }
     }
 
     Process {
@@ -1376,7 +1461,7 @@ Item {
                 }
                 var action = root.pendingSubAction || "enqueue";
                 var body = "#EXTM3U\n";
-                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:" + (tracks[j].duration || tracks[j].durationSecs || 0) + "," + (tracks[j].artist || "") + " - " + (tracks[j].title || "") + "\n" + tracks[j].path + "\n"
+                for (var j = 0; j < tracks.length; j++) body += "#EXTINF:" + (tracks[j].duration || tracks[j].durationSecs || 0) + "," + Subsonic.m3uTitle(tracks[j].artist, tracks[j].album, tracks[j].title) + "\n" + tracks[j].path + "\n"
                 var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                 root.runCliamp(root.pendingSubRow, action, {
                     "op": "url.load",
