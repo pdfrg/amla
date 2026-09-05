@@ -36,6 +36,11 @@ Item {
     property int selectedIndex: 0
     property var displayModel: []
     property string targetPlayer: "cliamp"
+    // Set by pluginConfigFile.onLoaded: until the real config.json has
+    // been read, targetPlayer/pluginMustBin/amlaPluginCfg are defaults
+    // and must NEVER be saved (a toggle in that window would persist
+    // empty mustBin/musicDirs/tempDirs over the user's real settings).
+    property bool pluginConfigLoaded: false
     property var mustConfig: Config.mustConfig("", Quickshell.env("HOME") || "")
     readonly property string home: Quickshell.env("HOME") || ""
     readonly property int cardWidth: 680
@@ -111,7 +116,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2333"
+    readonly property string buildId: "0.5.1553"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -145,22 +150,15 @@ Item {
     }
 
     function toggleTargetPlayer() {
+        if (!root.pluginConfigLoaded)
+            return ;
+
         root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
-        var pc = root.amlaPluginCfg || {
-        };
-        // Merge over a fresh disk read (see configSaveProc): in-memory
-        // amlaPluginCfg goes stale on external edits, and writing from it
-        // would silently drop keys added outside the shell.
-        configSaveProc.pending = Config.serializePluginConfig({
-            "targetPlayer": root.targetPlayer,
-            "mustBin": root.pluginMustBin,
-            "musicDirs": pc.musicDirs || [],
-            "tempDirs": pc.tempDirs || [],
-            "bucketWords": pc.bucketWords || [],
-            "noiseTokens": pc.noiseTokens || [],
-            "mpdHost": pc.mpdHost || "",
-            "mpdPort": pc.mpdPort || 0,
-            "debugNoMust": pc.debugNoMust === true
+        // Dirty keys only (partial object): the merge overlays these
+        // onto a fresh disk read, so stale in-memory values for the
+        // other owned keys (mustBin, dirs) can never wipe real settings.
+        configSaveProc.pending = JSON.stringify({
+            "targetPlayer": root.targetPlayer
         });
         configSaveProc.command = ["/bin/cat", root.home + "/.config/amla/config.json"];
         configSaveProc.running = true;
@@ -1726,9 +1724,11 @@ Item {
 
     // Config save merge: FileView watchChanges does not refire on external
     // edits, so in-memory amlaPluginCfg may predate keys added outside the
-    // shell. Every save re-reads the file and overlays only the keys amla
-    // owns; anything else on disk (hand edits, future keys) survives.
-    // A missing/unreadable file degrades to writing the known keys.
+    // shell. Every save re-reads the file and overlays only the dirty keys
+    // (configSaveProc.pending is a partial object); everything else keeps
+    // its on-disk value, so neither hand edits nor stale in-memory state
+    // can be clobbered. A missing/unreadable file degrades to writing the
+    // dirty keys.
     Process {
         id: configSaveProc
 
@@ -1743,13 +1743,13 @@ Item {
                     disk = JSON.parse(String(text || ""));
                 } catch (e) {
                 }
-                var known = JSON.parse(configSaveProc.pending);
-                for (var k in disk) {
-                    if (!(k in known))
-                        known[k] = disk[k];
+                var dirty = JSON.parse(configSaveProc.pending);
+                for (var k in dirty) {
+                    if (dirty[k] !== undefined)
+                        disk[k] = dirty[k];
 
                 }
-                pluginConfigFile.setText(JSON.stringify(known, null, 2) + "\n");
+                pluginConfigFile.setText(JSON.stringify(disk, null, 2) + "\n");
             }
         }
 
@@ -1827,6 +1827,7 @@ Item {
             root.amlaPluginCfg = pc;
             root.targetPlayer = pc.targetPlayer;
             root.pluginMustBin = pc.mustBin || "";
+            root.pluginConfigLoaded = true;
             if (pc.debugNoMust)
                 root.mustDbOk = false;
 
