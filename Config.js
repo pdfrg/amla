@@ -130,6 +130,35 @@ function mustConfig(text, home) {
   }
 }
 
+// cliamp config.toml [navidrome] → amla subsonic shape. No enabled flag
+// in cliamp: a present URL counts as enabled. Raw values (no env
+// expansion — the QML side expands ${VAR} secrets from the shell env).
+function cliampSubsonic(text) {
+  var parsed = parseToml(text)
+  var nav = parsed.sections.navidrome || {}
+  var url = String(nav.url || "").replace(/\/+$/, "")
+  return {
+    enabled: url.length > 0,
+    url: url,
+    username: String(nav.user || nav.username || ""),
+    password: String(nav.password || ""),
+    serverName: String(nav.server_name || "Navidrome"),
+    serverBadge: String(nav.server_badge || "S")
+  }
+}
+
+// Subsonic credential precedence: must's [subsonic] wins when enabled
+// with a URL (existing behavior), else cliamp's [navidrome] — present on
+// every omarchy install, so subsonic works with zero must. Both absent →
+// the must shape (disabled), preserving today's no-server behavior.
+function pickSubsonic(mustSub, cliampSub) {
+  if (mustSub && mustSub.enabled && String(mustSub.url || "").length > 0)
+    return mustSub
+  if (cliampSub && String(cliampSub.url || "").length > 0)
+    return cliampSub
+  return mustSub
+}
+
 // amla plugin config (~/.config/amla/config.json).
 // musicDirs/tempDirs override auto-detection when non-empty; bucketWords
 // and noiseTokens extend the path-parser defaults (§14); mpd is reserved

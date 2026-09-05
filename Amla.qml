@@ -104,7 +104,11 @@ Item {
         }
         return best;
     }
-    readonly property var sub: mustConfig.subsonic
+    // Effective subsonic creds: must's [subsonic] wins when enabled,
+    // else cliamp's [navidrome] (present on every omarchy install).
+    // Recomputed in both config loaders (either order); never written.
+    property var sub: Config.mustConfig("", "").subsonic
+    property var cliampNav: null
     readonly property bool subEnabled: sub.enabled && sub.url.length > 0 && sub.password.length > 0
     property int searchSerial: 0
     property bool searchDirty: false
@@ -116,7 +120,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1643"
+    readonly property string buildId: "0.5.1706"
     property string pendingSubAction: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
@@ -134,6 +138,20 @@ Item {
     // Auto-triggers (facet/search failures) are rate-limited so overlapping
     // failure events can't stack cold scans; manual refresh forces.
     property double lastIndexBuildMs: 0
+
+    // File-index mode (no must DB, or the debugNoMust simulation): local
+    // playback resolves against filesDb.files instead of mustDb.tracks.
+    function useFilesIndex() {
+        return !root.mustDbOk || root.debugNoMust();
+    }
+
+    function localDbPath() {
+        return root.useFilesIndex() ? root.filesDb : root.mustDb;
+    }
+
+    function localDbTable() {
+        return root.useFilesIndex() ? "files" : "tracks";
+    }
 
     function open(_payloadJson) {
         root.cardTop = -1;
@@ -487,7 +505,7 @@ Item {
             // Album-granular pick (GROUP BY album/artist): a random track's
             // parent dir can span multiple albums depending on library
             // layout, so resolve the exact album through the facet m3u flow.
-            randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+            randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.localDbPath() + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM " + root.localDbTable() + " WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
             randomAlbumProc.running = true;
             root.cancel();
             return ;
@@ -636,10 +654,12 @@ Item {
                 pendingSubAction = action;
                 pendingSubRow = row;
                 cliampResolveProc.environment = {
-                    "AMLA_DB": root.mustDb,
-                    "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle")
+                    "AMLA_DB": root.localDbPath(),
+                    "AMLA_FILESDB": root.filesDb,
+                    "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", root.localDbTable()),
+                    "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
                 return ;
             }
@@ -874,8 +894,8 @@ Item {
 
         mprisPathProc.lookupKey = key;
         mprisPathProc.environment = {
-            "AMLA_DB": root.mustDb,
-            "AMLA_SQL": Catalog.trackPathSql(artist, album, History.stripArtistPrefix(artist, title))
+            "AMLA_DB": root.localDbPath(),
+            "AMLA_SQL": Catalog.trackPathSql(artist, album, History.stripArtistPrefix(artist, title), root.localDbTable())
         };
         mprisPathProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\""];
         mprisPathProc.running = true;
@@ -948,7 +968,7 @@ Item {
             root.pumpSubBackfill();
             return ;
         }
-        backfillPathsProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.mustDb, Catalog.backfillPathsSql(missing)];
+        backfillPathsProc.command = ["/usr/bin/timeout", "--kill-after=5", "15", "/usr/bin/sqlite3", "-json", "-readonly", root.localDbPath(), Catalog.backfillPathsSql(missing, root.localDbTable())];
         backfillPathsProc.running = true;
     }
 
@@ -1148,10 +1168,12 @@ Item {
                 root.pendingSubAction = "play";
                 root.pendingSubRow = picked;
                 cliampResolveProc.environment = {
-                    "AMLA_DB": root.mustDb,
-                    "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked)
+                    "AMLA_DB": root.localDbPath(),
+                    "AMLA_FILESDB": root.filesDb,
+                    "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked, false, root.localDbTable()),
+                    "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql("album", picked, false, "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" && /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
             }
         }
@@ -1328,7 +1350,7 @@ Item {
                     // subsonic requests stay silent — nothing else applies.
                     if (root.randomFallbackLocal) {
                         root.randomFallbackLocal = false;
-                        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.mustDb + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM tracks WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+                        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.localDbPath() + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM " + root.localDbTable() + " WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
                         randomAlbumProc.running = true;
                     }
                     return ;
@@ -1814,6 +1836,18 @@ Item {
         printErrors: false
         onLoaded: {
             root.cliampInitialDir = Config.parseCliampConfig(text(), root.home).initialDirectory;
+            var nav = Config.cliampSubsonic(text());
+            // cliamp allows ${VAR} indirection for secrets: expand from
+            // the shell environment so token-based setups authenticate.
+            for (var k in nav) {
+                if (typeof nav[k] === "string")
+                    nav[k] = nav[k].replace(/\$\{([^}]+)\}/g, function(m, name) {
+                    return Quickshell.env(name) || m;
+                });
+
+            }
+            root.cliampNav = nav;
+            root.sub = Config.pickSubsonic(root.mustConfig.subsonic, nav);
             refreshRoots();
         }
     }
@@ -1826,6 +1860,7 @@ Item {
         printErrors: false
         onLoaded: {
             root.mustConfig = Config.mustConfig(text(), root.home);
+            root.sub = Config.pickSubsonic(root.mustConfig.subsonic, root.cliampNav);
             refreshRoots();
             // History may have loaded first while subEnabled was still
             // false — retry the server backfill now that creds exist.

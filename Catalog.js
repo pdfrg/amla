@@ -13,24 +13,26 @@ function sqlQuote(s) {
 
 // Resolve a file path for player-reported metadata (MPRIS has no path of
 // its own). Matches the app's artist coalescing; beets/lidarr tags trusted.
-function trackPathSql(artist, album, title) {
-  return "SELECT path FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
+function trackPathSql(artist, album, title, table) {
+  var t = table || "tracks"
+  return "SELECT path FROM " + t + " WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
     " COLLATE NOCASE AND album = " + sqlQuote(album) + " COLLATE NOCASE AND title = " + sqlQuote(title) + " COLLATE NOCASE LIMIT 1"
 }
 
 // One sample track path for an album (art lookup + backfill).
-function albumPathSql(artist, album) {
-  return "SELECT path FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
+function albumPathSql(artist, album, table) {
+  var t = table || "tracks"
+  return "SELECT path FROM " + t + " WHERE COALESCE(NULLIF(album_artist,''), artist) = " + sqlQuote(artist) +
     " COLLATE NOCASE AND album = " + sqlQuote(album) + " COLLATE NOCASE LIMIT 1"
 }
 
 // One row per history item lacking a path: {k, path} (path NULL when no
 // local match). Scalar subqueries keep it a single sqlite3 call.
-function backfillPathsSql(items) {
+function backfillPathsSql(items, table) {
   var parts = []
   for (var i = 0; i < items.length; i++) {
     var it = items[i]
-    var sel = it.type === "album" ? albumPathSql(it.artist, it.album) : trackPathSql(it.artist, it.album, it.title)
+    var sel = it.type === "album" ? albumPathSql(it.artist, it.album, table) : trackPathSql(it.artist, it.album, it.title, table)
     parts.push("SELECT " + sqlQuote(it.key) + " AS k, (" + sel + ") AS path")
   }
   return parts.join(" UNION ALL ")
@@ -92,7 +94,8 @@ function localSearchSql(q) {
 // Track list for a facet row (cliamp target has no library search): RAW SQL
 // emitting a ready m3u body ("#EXTINF:-1,Artist - Title" + path per track).
 // Passed to sqlite3 via env (no shell quoting); value quotes doubled SQL-side.
-function pathsForKindM3uSql(kind, row, randomOrder) {
+function pathsForKindM3uSql(kind, row, randomOrder, table) {
+    var t = table || "tracks"
     var v = String(row.title || "").replace(/'/g, "''")
     // Playshuffle pre-shuffles in SQL (cliamp pins the loaded head at
     // position 0, so deterministic ORDER BY would always start the same
@@ -101,21 +104,21 @@ function pathsForKindM3uSql(kind, row, randomOrder) {
     var trackOrder = randomOrder ? "ORDER BY RANDOM()" : "ORDER BY track_num"
     var inf = "'#EXTINF:-1,' || replace(COALESCE(NULLIF(album_artist,''), artist), char(10), ' ') || ' - ' || replace(album, char(10), ' ') || ' - ' || replace(title, char(10), ' ') || char(10) || path"
     if (kind === "artist")
-        return "SELECT " + inf + " FROM tracks WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE " + albumOrder
+        return "SELECT " + inf + " FROM " + t + " WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE " + albumOrder
     if (kind === "album") {
         var a = String(row.artist || "").replace(/'/g, "''")
         var where = "album = '" + v + "' COLLATE NOCASE"
         if (a.length > 0)
             where += " AND COALESCE(NULLIF(album_artist,''), artist) = '" + a + "' COLLATE NOCASE"
-        return "SELECT " + inf + " FROM tracks WHERE " + where + " " + trackOrder
+        return "SELECT " + inf + " FROM " + t + " WHERE " + where + " " + trackOrder
     }
     if (kind === "genre")
-        return "SELECT " + inf + " FROM tracks WHERE genre = '" + v + "' COLLATE NOCASE " + albumOrder
+        return "SELECT " + inf + " FROM " + t + " WHERE genre = '" + v + "' COLLATE NOCASE " + albumOrder
     if (kind === "year")
-        return "SELECT " + inf + " FROM tracks WHERE CAST(year AS TEXT) = '" + v + "' " + albumOrder
+        return "SELECT " + inf + " FROM " + t + " WHERE CAST(year AS TEXT) = '" + v + "' " + albumOrder
     if (kind === "decade")
-        return "SELECT " + inf + " FROM tracks WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " " + albumOrder
-    return "SELECT path FROM tracks LIMIT 0"
+        return "SELECT " + inf + " FROM " + t + " WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " " + albumOrder
+    return "SELECT path FROM " + t + " LIMIT 0"
 }
 
 // Facets: full genre + year lists, fetched once per popup open.
