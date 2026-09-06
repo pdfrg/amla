@@ -521,6 +521,40 @@ function listingRows(listing, q, noiseTokens) {
   return rows
 }
 
+// Shuffle an m3u body for playshuffle pre-shuffle (cliamp's doShuffle
+// pins the loaded head at 0, so the body itself must arrive shuffled —
+// same policy as the facet flows). #EXTM3U stays first; #EXTINF stays
+// glued to its entry; every other line shuffles as a singleton.
+function shuffleM3uBody(body) {
+  var chunks = []
+  var head = null
+  var lines = String(body || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i]
+    if (ln.length === 0)
+      continue
+    if (head === null && ln.indexOf("#EXTM3U") === 0) {
+      head = ln
+      continue
+    }
+    if (ln.indexOf("#EXTINF") === 0 && i + 1 < lines.length) {
+      chunks.push(ln + "\n" + lines[i + 1])
+      i++
+      continue
+    }
+    chunks.push(ln)
+  }
+  for (var j = chunks.length - 1; j > 0; j--) {
+    var k = Math.floor(Math.random() * (j + 1))
+    var t = chunks[j]
+    chunks[j] = chunks[k]
+    chunks[k] = t
+  }
+  if (head !== null)
+    chunks.unshift(head)
+  return chunks.join("\n") + "\n"
+}
+
 var TIER_ORDER = {
   artist: 0,
   album: 1,

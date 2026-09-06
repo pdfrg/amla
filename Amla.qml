@@ -127,15 +127,16 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1870"
+    readonly property string buildId: "0.5.1880"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
-    // play uses the native `load` op instead). Set by resolveTomlPlaylist,
-    // consumed by completeTomlPlaylist.
+    // play uses the native `load` op instead). Set by resolvePlaylistBody,
+    // consumed by completePlaylistBody.
     property var pendingPlaylistRow: null
     property string pendingPlaylistAction: ""
     property string pendingPlaylistTarget: ""
+    property string pendingPlaylistMode: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
     // Cold subsonic-album play retry (P3): set by dispatchSubsonicCliamp
@@ -646,19 +647,26 @@ Item {
             if (row.kind === "playlist") {
                 if (row.source === "cliamp") {
                     // Native toml load: replaces the live playlist and
-                    // starts it in one call (no m3u round-trip). Enqueues
-                    // have no native op — synthesize an m3u first.
-                    if (action === "enqueue" || action === "enqueue-next") {
-                        root.resolveTomlPlaylist(row, action);
+                    // starts it in one call (no m3u round-trip). Anything
+                    // needing a body (enqueues, playshuffle pre-shuffle)
+                    // synthesizes first.
+                    if (action === "play") {
+                        runCliamp(row, action, {
+                            "op": "load",
+                            "params": {
+                                "playlist": row.title
+                            },
+                            "plName": row.title
+                        });
                         return ;
                     }
-                    runCliamp(row, action, {
-                        "op": "load",
-                        "params": {
-                            "playlist": row.title
-                        },
-                        "plName": row.title
-                    });
+                    root.resolvePlaylistBody(row, action);
+                    return ;
+                }
+                if (action === "playshuffle") {
+                    // Pre-shuffled body: cliamp's shuffle pins the loaded
+                    // head at 0, so file order would fix track 1.
+                    root.resolvePlaylistBody(row, action);
                     return ;
                 }
                 // url.load resolves the m3u (relative paths from its dir).
@@ -707,7 +715,7 @@ Item {
         if (target === "must" && row && row.kind === "playlist" && row.source === "cliamp") {
             // must cannot read cliamp's toml format: synthesize an m3u
             // first, then dispatch must play/enqueue on the file.
-            root.resolveTomlPlaylist(row, action);
+            root.resolvePlaylistBody(row, action);
             return ;
         }
         dispatchProc.script = Dispatch.build(action, row, target, ctx);
@@ -820,32 +828,38 @@ Item {
         notifyProc.running = true;
     }
 
-    // cliamp toml → m3u synthesis (§15a): `playlist show --json` is the
-    // authoritative expansion ([[track]] + [[dir]] + ~ + env). Local
-    // files go as bare paths (cliamp tag-probes them: full metadata +
-    // album grouping, which a wholesale EXTINF title would destroy);
-    // http entries keep EXTINF duration/title (untaggable streams — a
-    // bare URL renders as the bare host). Completion routes must-target
-    // to Dispatch via ctx.resolvedM3u, cliamp-target to url.load + m3u.
-    function resolveTomlPlaylist(row, action) {
+    // Playlist → m3u body (§15a): mode toml synthesizes via cliamp
+    // `playlist show --json` (authoritative [[track]] + [[dir]] + ~ +
+    // env expansion); mode file cats a must m3u verbatim. Local files go
+    // as bare paths (cliamp tag-probes them: full metadata + album
+    // grouping, which a wholesale EXTINF title would destroy); http
+    // entries keep EXTINF duration/title (untaggable streams — a bare
+    // URL renders as the bare host). Completion routes must-target to
+    // Dispatch via ctx.resolvedM3u, cliamp-target to url.load + m3u —
+    // pre-shuffled for playshuffle (cliamp pins the loaded head at 0).
+    function resolvePlaylistBody(row, action) {
         if (playlistResolveProc.running)
             return ;
 
+        var mode = row.source === "cliamp" ? "toml" : "file";
         root.pendingPlaylistRow = row;
         root.pendingPlaylistAction = action;
         root.pendingPlaylistTarget = root.targetPlayer;
+        root.pendingPlaylistMode = mode;
         playlistResolveProc.environment = {
             "PATH": "/usr/bin:/bin",
+            "AMLA_PL_MODE": mode,
             "AMLA_PL_NAME": String(row.title || ""),
+            "AMLA_PL_PATH": String(row.path || ""),
             "AMLA_HOME": root.home,
             "AMLA_XDG_CONFIG_HOME": Quickshell.env("XDG_CONFIG_HOME") || "",
             "AMLA_CLIAMP_CONFIG_DIR": Quickshell.env("CLIAMP_CONFIG_DIR") || ""
         };
-        playlistResolveProc.command = ["/usr/bin/sh", "-c", "[ -x /usr/bin/jq ] || exit 3; export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\""];
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/cat \"$AMLA_PL_PATH\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
         playlistResolveProc.running = true;
     }
 
-    function completeTomlPlaylist(text) {
+    function completePlaylistBody(text) {
         var row = root.pendingPlaylistRow;
         var action = root.pendingPlaylistAction || "play";
         var target = root.pendingPlaylistTarget || "cliamp";
@@ -856,9 +870,12 @@ Item {
         }
         var body = String(text || "").trim();
         if (body.length === 0 || body === "#EXTM3U") {
-            root.notify("amla: could not read cliamp playlist '" + row.title + "' (needs cliamp + jq) or it is empty");
+            root.notify("amla: could not read playlist '" + row.title + "'" + (root.pendingPlaylistMode === "toml" ? " (needs cliamp + jq)" : "") + " or it is empty");
             return ;
         }
+        if (action === "playshuffle" && target === "cliamp")
+            body = Catalog.shuffleM3uBody(body);
+
         if (target === "must") {
             var ctx = {
                 "mustBin": root.pluginMustBin,
@@ -872,13 +889,16 @@ Item {
             return ;
         }
         var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+        // playshuffle passes through: runCliamp rewrites it to a
+        // clear-first play + shuffleAfter (same as the facet flows).
+        var started = action === "play" || action === "playshuffle";
         root.runCliamp(row, action, {
             "op": "url.load",
             "params": {
                 "path": m3u,
-                "play": action === "play"
+                "play": started
             },
-            "clearFirst": action === "play",
+            "clearFirst": started,
             "insertNext": action === "enqueue-next",
             "m3uBody": body,
             "launchTarget": m3u
@@ -1408,7 +1428,7 @@ Item {
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
-                root.completeTomlPlaylist(text);
+                root.completePlaylistBody(text);
             }
         }
 
