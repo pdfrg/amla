@@ -191,6 +191,12 @@ function listingCommand(tempDirs, playlistDir, musicDirs, cliampPlaylistDir) {
   for (var m = 0; m < roots.length; m++) {
     cmd += "/usr/bin/find '" + roots[m] + "' -mindepth 1 -maxdepth 2 -type d -print 2>/dev/null | /usr/bin/sed 's/^/L/' | /usr/bin/sort -f;"
   }
+  for (var s = 0; s < roots.length; s++) {
+    // Stray playlists: entry counts exactly like the must-dir pass;
+    // parseListing dedups paths (a playlist dir inside a music root
+    // keeps its P-line identity — first-seen wins).
+    cmd += "/usr/bin/find '" + roots[s] + "' -type f \\( -iname '*.m3u' -o -iname '*.m3u8' \\) -print 2>/dev/null | while IFS= read -r f; do printf 'S%d\\t%s\\n' \"$(/usr/bin/grep -cv -e '^#' -e '^$' \"$f\")\" \"$f\"; done;";
+  }
   return cmd
 }
 
@@ -268,7 +274,8 @@ JsonDecoder.prototype.nextArray = function () {
 
 // listingCommand output → { temp: [paths], playlists: [{ path, source,
 // count, dirBacked }], library: [paths] }. P = must m3u (count exact),
-// C = cliamp toml (count = [[track]] sections, + when [[dir]] backed).
+// C = cliamp toml (count = [[track]] sections, + when [[dir]] backed),
+// S = stray m3u under a music root (count exact, source "stray").
 function parseListing(out) {
   var temp = []
   var playlists = []
@@ -282,7 +289,7 @@ function parseListing(out) {
     var p = line.substring(1)
     if (tag === "T")
       temp.push(p)
-    else if (tag === "P" || tag === "C") {
+    else if (tag === "P" || tag === "C" || tag === "S") {
       var tab = p.indexOf("\t")
       var count = -1
       var dirBacked = false
@@ -298,7 +305,17 @@ function parseListing(out) {
           count = -1
         pp = p.substring(tab + 1)
       }
-      playlists.push({ path: pp, source: tag === "C" ? "cliamp" : "must", count: count, dirBacked: dirBacked })
+      // Stray (S) rows come from the music-root scan; a playlist dir
+      // inside a music root also emits P — first-seen wins, so the
+      // designated-dir identity (must/cliamp) is kept.
+      var src = tag === "C" ? "cliamp" : (tag === "S" ? "stray" : "must")
+      var dup = false
+      for (var d = 0; d < playlists.length; d++) if (playlists[d].path === pp) {
+        dup = true;
+        break;
+      }
+      if (!dup)
+        playlists.push({ path: pp, source: src, count: count, dirBacked: dirBacked })
     } else if (tag === "L")
       library.push(p)
   }

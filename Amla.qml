@@ -127,7 +127,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1920"
+    readonly property string buildId: "0.5.1930"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
@@ -718,8 +718,9 @@ Item {
             }
             return ;
         }
-        if (target === "must" && row && row.kind === "playlist" && row.source === "cliamp") {
-            // must cannot read cliamp's toml format: synthesize an m3u
+        if (target === "must" && row && row.kind === "playlist" && (row.source === "cliamp" || row.source === "stray")) {
+            // must cannot read cliamp's toml format (and knows stray files only
+            // by path, not by saved name): synthesize an m3u
             // first, then dispatch must play/enqueue on the file.
             root.resolvePlaylistBody(row, action);
             return ;
@@ -861,7 +862,7 @@ Item {
             "AMLA_XDG_CONFIG_HOME": Quickshell.env("XDG_CONFIG_HOME") || "",
             "AMLA_CLIAMP_CONFIG_DIR": Quickshell.env("CLIAMP_CONFIG_DIR") || ""
         };
-        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\" | /usr/bin/tee \"$R/pl.m3u\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
         playlistResolveProc.running = true;
     }
 
