@@ -100,6 +100,17 @@ then `omarchy restart shell` (hand-edits need a restart — see above). The
 same file takes `mustBin`, `bucketWords`, `noiseTokens`, `mpdHost`/`mpdPort`
 overrides; `Ctrl+T` in the popup flips `targetPlayer` for you.
 
+Path-parser extras (`bucketWords` / `noiseTokens`): the file indexer must
+decide which directory levels are artist/album and which are just
+containers. `bucketWords` extends the built-in bucket set (names like
+`flac`, `sorted`, `incoming` that are never artist/album) — matched
+case-insensitively at either dir level, so `"rips"` keeps `Music/rips/Dylan/...`
+from parsing `rips` as the artist. A flat `Artist - Album` dirname is
+exempt (the exact ` - ` separator declares the whole name). Words are
+trimmed, empties ignored, commas allowed. `noiseTokens` likewise extends
+the trailing ` - token` segments stripped from album dir names
+(codecs, sources: `24 bit`, `vinyl`, `320`…).
+
 Player configs that also feed the chain:
 
 `omarchy-launch-editor --inline /home/$USER/.config/cliamp/config.toml`

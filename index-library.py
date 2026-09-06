@@ -8,7 +8,7 @@ per file — that is ~95% of the speed difference measured in the plan).
 
 Usage:
   index-library.py --db ~/.cache/amla/files.db [--tagger auto|path|mutagen|ffprobe]
-                   [--extra-buckets a,b] [--extra-noise x,y] <root>...
+                   [--extra-buckets w] [--extra-noise x,y] <root>...
 
 Prints one JSON summary line to stdout; exit 0 on success (per-file
 errors are skipped, never fatal), exit 2 on fatal errors. Never touches
@@ -87,8 +87,9 @@ def parse_args(argv):
     ap.add_argument("--db", required=True, help="sqlite file index path")
     ap.add_argument("--tagger", default="auto",
                     choices=["auto", "path", "mutagen", "ffprobe"])
-    ap.add_argument("--extra-buckets", default="",
-                    help="comma-separated extra bucket dir names")
+    ap.add_argument("--extra-buckets", default=[], action="append",
+                    help="extra bucket dir name, exact match (repeat the "
+                         "flag; commas allowed); matched case-insensitively")
     ap.add_argument("--extra-noise", default="",
                     help="comma-separated extra noise tokens (regex, "
                          "matched whole-segment case-insensitively)")
@@ -360,9 +361,11 @@ def main(argv):
     t0 = time.time()
     args = parse_args(argv)
     buckets = set(BUCKET_DEFAULT)
-    for b in args.extra_buckets.split(","):
-        if b.strip():
-            buckets.add(b.strip().lower())
+    # One flag = one exact word (no comma-splitting, so names with
+    # commas survive); normalized the same way matching normalizes.
+    for chunk in args.extra_buckets:
+        if str(chunk).strip():
+            buckets.add(str(chunk).strip().lower())
     extra_res = []
     for n in args.extra_noise.split(","):
         if n.strip():

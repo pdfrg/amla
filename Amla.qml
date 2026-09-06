@@ -127,7 +127,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1900"
+    readonly property string buildId: "0.5.1910"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
@@ -1165,9 +1165,14 @@ Item {
         var cmd = ["/usr/bin/python3", root.indexerPath(), "--db", root.filesDb, "--tagger", "auto"];
         var pc = root.amlaPluginCfg || {
         };
-        if ((pc.bucketWords || []).length > 0)
-            cmd = cmd.concat(["--extra-buckets", pc.bucketWords.join(",")]);
-
+        // Bucket words: one flag per word (dir names may contain commas);
+        // trimmed, empties dropped — the indexer lowercases for matching.
+        var bw = (pc.bucketWords || []).map(function(w) {
+            return String(w).trim();
+        }).filter(function(w) {
+            return w.length > 0;
+        });
+        for (var bwi = 0; bwi < bw.length; bwi++) cmd.push("--extra-buckets", bw[bwi])
         if ((pc.noiseTokens || []).length > 0)
             cmd = cmd.concat(["--extra-noise", pc.noiseTokens.join(",")]);
 
