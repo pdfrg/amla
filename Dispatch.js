@@ -22,6 +22,42 @@ function shq(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
+// First must release shipping subsonic:playlist:<id> (commit a297ac9).
+var MUST_PLAYLIST_MIN = [0, 2, 4]
+
+// Capability gate for the native server-playlist resolver. versionText
+// is `must --version` output ("must v0.2.4 (...)" / "must dev (...)").
+// Unknown ("" / unparseable / no binary) => false: callers fall back to
+// the staged-m3u handoff, which works on every must with the file tier.
+function mustHasPlaylistResolver(versionText) {
+    var v = String(versionText || "")
+    if (v.indexOf("dev") >= 0)
+        return true
+    var m = v.match(/v?(\d+)\.(\d+)\.(\d+)/)
+    if (!m)
+        return false
+    var want = MUST_PLAYLIST_MIN
+    for (var i = 1; i <= 3; i++) {
+        var have = parseInt(m[i], 10) || 0
+        if (have !== want[i - 1])
+            return have > want[i - 1]
+    }
+    return true
+}
+
+// True only for a positively-old must (parsed version below the floor,
+// not dev, not unknown): the session-nudge condition. Unknown versions
+// fall back silently — no nagging over a probe that never answered.
+function mustVersionIsOld(versionText) {
+    var v = String(versionText || "")
+    if (v.length === 0 || v.indexOf("dev") >= 0)
+        return false
+    var m = v.match(/v?(\d+)\.(\d+)\.(\d+)/)
+    if (!m)
+        return false
+    return !mustHasPlaylistResolver(v)
+}
+
 // Shared must-binary-not-found notification fragment (module scope: used by
 // mustBinScript's generated scripts).
 var NOTIFY_BIN = "/usr/bin/notify-send -a amla 'amla' 'must binary not found — install it (e.g. to ~/.local/bin) or set mustBin in ~/.config/amla/config.json' >/dev/null 2>&1 &"
@@ -117,15 +153,16 @@ function build(action, row, target, ctx) {
             // resolver (saved name) or the synthesized m3u (toml source)
             // instead of a free-text query, which would FTS-miss.
             var psArgs = "playshuffle " + shq(psq)
-            if (row && row.kind === "playlist") {
+            if (row && (row.kind === "playlist" || row.kind === "subsonic-playlist")) {
                 if (ctx.resolvedM3u)
                     psArgs = "playshuffle " + shq(ctx.resolvedM3u)
-                else if (row.source !== "cliamp")
+                else if (row.kind === "playlist" && row.source !== "cliamp")
                     psArgs = "playshuffle " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, ""))
-            } else if (row && row.kind === "subsonic-playlist") {
-                var subPs = mustResolver(row)
-                if (subPs.length > 0)
-                    psArgs = "playshuffle " + subPs
+                else if (row.kind === "subsonic-playlist") {
+                    var subPs = mustResolver(row)
+                    if (subPs.length > 0)
+                        psArgs = "playshuffle " + subPs
+                }
             }
             return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + psArgs +
                 "\nelse\n  " + launchVerb(psArgs) + "\nfi"
@@ -133,7 +170,7 @@ function build(action, row, target, ctx) {
         var res = mustResolver(row)
         // toml playlists reach must as a synthesized m3u (must cannot
         // read cliamp's format); the QML side resolves it first.
-        if (row && row.kind === "playlist" && ctx.resolvedM3u)
+        if (row && (row.kind === "playlist" || row.kind === "subsonic-playlist") && ctx.resolvedM3u)
             res = shq(ctx.resolvedM3u)
         if (res.length === 0)
             return "exit 1"
@@ -143,7 +180,7 @@ function build(action, row, target, ctx) {
             // (silent empty playlist). Files/dirs instead go as launch args
             // (loadCLIPaths + --play); prefixed resolvers keep the ctl verb.
             var launchArgs
-            if (ctx.resolvedM3u && row.kind === "playlist")
+            if (ctx.resolvedM3u && (row.kind === "playlist" || row.kind === "subsonic-playlist"))
                 launchArgs = shq(ctx.resolvedM3u) + " --play"
             else if ((row.kind === "song" || row.kind === "temp" || row.kind === "library") && row.path)
                 launchArgs = shq(row.path) + " --play"

@@ -128,8 +128,15 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1950"
+    readonly property string buildId: "0.5.1960"
     property string pendingSubAction: ""
+    property string pendingSubTarget: ""
+    // `must --version` output ("" = unknown): capability gating for the
+    // native server-playlist resolver (must >= v0.2.4, or dev builds).
+    property string mustVersion: ""
+    // Session upgrade nudge: fired once when falling back on a
+    // positively-old must (never for unknown versions, never twice).
+    property bool mustNudged: false
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
     // play uses the native `load` op instead). Set by resolvePlaylistBody,
@@ -176,6 +183,7 @@ Item {
         root.selectedIndex = 0;
         refreshRoots();
         refreshFacets();
+        root.probeMustVersion();
     }
 
     // IPC freshness probe: omarchy-shell shell call io.github.pdfrg.amla buildInfo ""
@@ -490,6 +498,20 @@ Item {
         }
     }
 
+    // Capability probe for must-gated features: one fork per popup
+    // open, result cached in mustVersion ("dev" counts as new).
+    function probeMustVersion() {
+        if (mustVersionProc.running)
+            return ;
+
+        mustVersionProc.environment = {
+            "PATH": "/usr/bin:/bin",
+            "AMLA_MUSTBIN": String(root.pluginMustBin || "")
+        };
+        mustVersionProc.command = ["/usr/bin/sh", "-c", "B=\"$AMLA_MUSTBIN\"; [ -x \"$B\" ] || B=$(command -v must 2>/dev/null || true); if [ -n \"$B\" ]; then \"$B\" --version 2>/dev/null; fi"];
+        mustVersionProc.running = true;
+    }
+
     function dispatch(row, action) {
         var target = root.targetPlayer;
         var ctx = {
@@ -720,6 +742,24 @@ Item {
                 cliampResolveProc.running = true;
                 return ;
             }
+            return ;
+        }
+        // Native path (must >= v0.2.4, or dev) falls through to
+        // Dispatch.build, whose mustResolver emits
+        // subsonic:playlist:'<id>'. Older/unknown must takes the
+        // compatibility path: fetch the entries over REST and hand
+        // must the staged stream-URL m3u by path.
+        if (target === "must" && row && row.kind === "subsonic-playlist" && row.id && !Dispatch.mustHasPlaylistResolver(root.mustVersion)) {
+            if (!root.mustNudged && Dispatch.mustVersionIsOld(root.mustVersion)) {
+                root.mustNudged = true;
+                root.notify("amla: server playlists via compatibility mode — upgrade must to v0.2.4+ for native support");
+            }
+            var compatAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            pendingSubAction = action;
+            pendingSubRow = row;
+            pendingSubTarget = "must";
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, compatAuth, row.id)];
+            subPlaylistProc.running = true;
             return ;
         }
         if (target === "must" && row && row.kind === "playlist" && (row.source === "cliamp" || row.source === "stray")) {
@@ -1698,8 +1738,9 @@ Item {
         }
     }
 
-    // Server-side playlist expansion (cliamp target; must resolves
-    // natively via subsonic:playlist:<id>): getPlaylist entries →
+    // Server-side playlist expansion (cliamp target, plus the must
+    // compatibility fallback; new must resolves natively via
+    // subsonic:playlist:<id>): getPlaylist entries →
     // stream-URL m3u written straight to disk (a big server list would
     // die in the dispatch env handoff). Playshuffle pre-shuffles
     // (cliamp pins the loaded head at 0).
@@ -1732,6 +1773,18 @@ Item {
         onSaved: {
             var action = root.pendingSubAction || "enqueue";
             var file = root.runtimeDir + "/amla/subpl.m3u";
+            if (root.pendingSubTarget === "must") {
+                var compatCtx = {
+                    "mustBin": root.pluginMustBin,
+                    "query": root.filterText,
+                    "resolvedM3u": file
+                };
+                dispatchProc.hist = historyFor(root.pendingSubRow);
+                dispatchProc.script = Dispatch.build(action, root.pendingSubRow, "must", compatCtx);
+                dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
+                dispatchProc.running = true;
+                return ;
+            }
             root.runCliamp(root.pendingSubRow, action, {
                 "op": "url.load",
                 "params": {
@@ -1746,6 +1799,21 @@ Item {
         onSaveFailed: function(error) {
             console.log("[amla] server playlist m3u write failed: " + error);
         }
+    }
+
+    // must capability probe (see probeMustVersion): stdout is the raw
+    // `must --version` line, cached in mustVersion; empty when no
+    // binary (unknown => compatibility fallbacks, never a nag).
+    Process {
+        id: mustVersionProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                root.mustVersion = String(text || "").trim();
+            }
+        }
+
     }
 
     Process {
