@@ -6,7 +6,7 @@
 // subsonic:<q>, artist:<q>, album:<q>, genre:<q>, year:<y|from-to>, free text.
 // must play / playshuffle auto-start the TUI when not running; enqueue does
 // not (degrades to launch + notification per plan).
-// cliamp v2.0.1 (docs + pinned empirically): V2 IPC via `cliamp remote call
+// cliamp v2.0.1 (docs + pinned empirically): V2 IPC via `/usr/bin/cliamp remote call
 // <op> --params <json> --wait` against ~/.config/cliamp/cliamp.sock.
 // url.load resolves a directory (recursive scan, embedded tags), an .m3u
 // (relative paths resolved from the file), or a single URL; "play": true
@@ -170,7 +170,7 @@ function build(action, row, target, ctx) {
     // when cliamp is not running (play actions only).
     var RUNNING = cliampRunningExpr()
     var LAUNCH = "/usr/share/omarchy/bin/omarchy-launch-tui cliamp"
-    var RUNTIME_DIR = "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    var RUNTIME_DIR = "${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}"
     var runOp = "/usr/bin/cliamp remote call \"$AMLA_OP\" --params \"$AMLA_PARAMS\" --wait >/dev/null 2>&1"
     // Play replaces the live playlist (url.load / track.play only append),
     // so clear first. Newline-chained: the load still runs if the clear
@@ -188,21 +188,21 @@ function build(action, row, target, ctx) {
     // design (no flag). The load op's own status is the script's exit
     // status, so history only records real plays.
     if (ctx.insertNext) {
-        runOp = "if command -v jq >/dev/null 2>&1; then SNAP=$(cliamp remote call \"runtime.snapshot\" --params '{}' --wait 2>/dev/null)\n    P=$(printf '%s' \"$SNAP\" | jq -r '.snapshot.track.path // empty')\n    SUBID=$(printf '%s' \"$SNAP\" | jq -r '.snapshot.track.provider_meta.\"navidrome.id\" // empty')\n    N0=$(cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | jq -r '.job.result.total // 0')\n  else P=\"\"\n    SUBID=\"\"\n    N0=0\n  fi\n  " + runOp +
-            "\n  OP_STATUS=$?\n  CUR=\"\"\n  if [ -n \"$SUBID\" ]; then CUR=$(cliamp remote call \"queue.list\" --params '{\"limit\":5000}' --wait 2>/dev/null | jq -r --arg id \"$SUBID\" '.job.result.tracks | to_entries | map(select(.value.provider_meta.\"navidrome.id\" == $id)) | .[0].key // empty')\n  elif [ -n \"$P\" ]; then CUR=$(cliamp remote call \"queue.list\" --params '{\"limit\":5000}' --wait 2>/dev/null | jq -r --arg p \"$P\" '.job.result.tracks | to_entries | map(select(.value.path == $p)) | .[0].key // empty')\n  fi\n  if [ -n \"$CUR\" ]; then\n    N1=$(cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | jq -r '.job.result.total // 0')\n    T=$((CUR + 1))\n    I=$((N0 + 0))\n    N1=$((N1 + 0))\n    while [ \"$I\" -lt \"$N1\" ]; do\n      cliamp remote call \"queue.move\" --params \"{\\\"index\\\":$I,\\\"to\\\":$T}\" --wait >/dev/null 2>&1\n      I=$((I + 1))\n      T=$((T + 1))\n    done\n  fi\n  exit $OP_STATUS"
+        runOp = "if [ -x /usr/bin/jq ] || command -v jq >/dev/null 2>&1; then SNAP=$(/usr/bin/cliamp remote call \"runtime.snapshot\" --params '{}' --wait 2>/dev/null)\n    P=$(printf '%s' \"$SNAP\" | /usr/bin/jq -r '.snapshot.track.path // empty')\n    SUBID=$(printf '%s' \"$SNAP\" | /usr/bin/jq -r '.snapshot.track.provider_meta.\"navidrome.id\" // empty')\n    N0=$(/usr/bin/cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | /usr/bin/jq -r '.job.result.total // 0')\n  else P=\"\"\n    SUBID=\"\"\n    N0=0\n  fi\n  " + runOp +
+            "\n  OP_STATUS=$?\n  CUR=\"\"\n  if [ -n \"$SUBID\" ]; then CUR=$(/usr/bin/cliamp remote call \"queue.list\" --params '{\"limit\":5000}' --wait 2>/dev/null | /usr/bin/jq -r --arg id \"$SUBID\" '.job.result.tracks | to_entries | map(select(.value.provider_meta.\"navidrome.id\" == $id)) | .[0].key // empty')\n  elif [ -n \"$P\" ]; then CUR=$(/usr/bin/cliamp remote call \"queue.list\" --params '{\"limit\":5000}' --wait 2>/dev/null | /usr/bin/jq -r --arg p \"$P\" '.job.result.tracks | to_entries | map(select(.value.path == $p)) | .[0].key // empty')\n  fi\n  if [ -n \"$CUR\" ]; then\n    N1=$(/usr/bin/cliamp remote call \"queue.list\" --params '{\"limit\":1}' --wait 2>/dev/null | /usr/bin/jq -r '.job.result.total // 0')\n    T=$((CUR + 1))\n    I=$((N0 + 0))\n    N1=$((N1 + 0))\n    while [ \"$I\" -lt \"$N1\" ]; do\n      /usr/bin/cliamp remote call \"queue.move\" --params \"{\\\"index\\\":$I,\\\"to\\\":$T}\" --wait >/dev/null 2>&1\n      I=$((I + 1))\n      T=$((T + 1))\n    done\n  fi\n  exit $OP_STATUS"
     }
     // playshuffle: the load above replaced the playlist; switch shuffle
     // explicitly on (not a toggle) so the fresh material plays shuffled.
     // The load's own status (not shuffle's) is what history records.
     if (ctx.shuffleAfter)
-        runOp += "\n  OP_STATUS=$?\n  cliamp remote call \"shuffle\" --params '{\"name\":\"on\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
+        runOp += "\n  OP_STATUS=$?\n  /usr/bin/cliamp remote call \"shuffle\" --params '{\"name\":\"on\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
     // Plain play means in-order: cliamp persists shuffle to config.toml on
     // every toggle, so a leftover shuffle=on would otherwise survive
     // restarts and shuffle the next play. Idempotent (op only toggles when
     // needed); load status still decides history. Enqueue paths never set
     // this — they must not disturb the running order.
     else if (ctx.shuffleOffAfter)
-        runOp += "\n  OP_STATUS=$?\n  cliamp remote call \"shuffle\" --params '{\"name\":\"off\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
+        runOp += "\n  OP_STATUS=$?\n  /usr/bin/cliamp remote call \"shuffle\" --params '{\"name\":\"off\"}' --wait >/dev/null 2>&1\n  exit $OP_STATUS"
     var prep = ""
     if (ctx.m3uBody)
         prep = "/usr/bin/mkdir -p \"" + RUNTIME_DIR + "/amla\" && printf '%s' \"$AMLA_M3U\" > \"" + RUNTIME_DIR + "/amla/queue.m3u\"\n  "

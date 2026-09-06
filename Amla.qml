@@ -24,6 +24,9 @@ Item {
     // The file is written before the running/not-running branch, so
     // a fresh TUI can launch directly on the full list (cliamp
     // resolves local m3u argv entries itself).
+    // QML Process environment may not inherit the shell env
+    // (cliamp needs HOME for config resolution, jq/id need no
+    // PATH when invoked absolutely): pass through explicitly.
 
     id: root
 
@@ -124,7 +127,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1860"
+    readonly property string buildId: "0.5.1870"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
@@ -689,12 +692,13 @@ Item {
                 pendingSubAction = action;
                 pendingSubRow = row;
                 cliampResolveProc.environment = {
+                    "PATH": "/usr/bin:/bin",
                     "AMLA_DB": root.localDbPath(),
                     "AMLA_FILESDB": root.filesDb,
                     "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", root.localDbTable()),
                     "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
                 return ;
             }
@@ -737,6 +741,8 @@ Item {
         dispatchProc.hist = historyFor(row);
         dispatchProc.script = Dispatch.build(action, row, "cliamp", ctx);
         dispatchProc.environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": root.home,
             "AMLA_OP": String(ctx.op || ""),
             "AMLA_PARAMS": JSON.stringify(ctx.params || {
             }),
@@ -807,6 +813,7 @@ Item {
 
     function notify(msg) {
         notifyProc.environment = {
+            "PATH": "/usr/bin:/bin",
             "AMLA_MSG": String(msg || "")
         };
         notifyProc.command = ["/usr/bin/sh", "-c", "/usr/bin/notify-send -a amla 'amla' \"$AMLA_MSG\" >/dev/null 2>&1 &"];
@@ -828,9 +835,13 @@ Item {
         root.pendingPlaylistAction = action;
         root.pendingPlaylistTarget = root.targetPlayer;
         playlistResolveProc.environment = {
-            "AMLA_PL_NAME": String(row.title || "")
+            "PATH": "/usr/bin:/bin",
+            "AMLA_PL_NAME": String(row.title || ""),
+            "AMLA_HOME": root.home,
+            "AMLA_XDG_CONFIG_HOME": Quickshell.env("XDG_CONFIG_HOME") || "",
+            "AMLA_CLIAMP_CONFIG_DIR": Quickshell.env("CLIAMP_CONFIG_DIR") || ""
         };
-        playlistResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/command -v jq >/dev/null 2>&1 || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\""];
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "[ -x /usr/bin/jq ] || exit 3; export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\""];
         playlistResolveProc.running = true;
     }
 
@@ -913,6 +924,8 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             subCliampTracksProc.environment = {
+                "PATH": "/usr/bin:/bin",
+                "HOME": root.home,
                 "AMLA_POP": "provider.album_tracks",
                 "AMLA_PPARAMS": JSON.stringify({
                     "provider": "navidrome",
@@ -930,6 +943,8 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             subCliampTracksProc.environment = {
+                "PATH": "/usr/bin:/bin",
+                "HOME": root.home,
                 "AMLA_POP": "provider.search",
                 "AMLA_PPARAMS": JSON.stringify({
                     "provider": "navidrome",
@@ -957,6 +972,8 @@ Item {
             // "artist album" resolves its tracks without REST.
             var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
             subCliampTracksProc.environment = {
+                "PATH": "/usr/bin:/bin",
+                "HOME": root.home,
                 "AMLA_POP": "provider.search",
                 "AMLA_PPARAMS": JSON.stringify({
                     "provider": "navidrome",
@@ -1004,6 +1021,7 @@ Item {
 
         mprisPathProc.lookupKey = key;
         mprisPathProc.environment = {
+            "PATH": "/usr/bin:/bin",
             "AMLA_DB": root.localDbPath(),
             "AMLA_SQL": Catalog.trackPathSql(artist, album, History.stripArtistPrefix(artist, title), root.localDbTable())
         };
@@ -1282,12 +1300,13 @@ Item {
                 root.pendingSubAction = "play";
                 root.pendingSubRow = picked;
                 cliampResolveProc.environment = {
+                    "PATH": "/usr/bin:/bin",
                     "AMLA_DB": root.localDbPath(),
                     "AMLA_FILESDB": root.filesDb,
                     "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked, false, root.localDbTable()),
                     "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql("album", picked, false, "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
             }
         }
