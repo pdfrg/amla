@@ -127,7 +127,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1890"
+    readonly property string buildId: "0.5.1900"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
@@ -258,6 +258,12 @@ Item {
                 for (var sfi = 0; sfi < subFacets.length; sfi++) {
                     subFacets[sfi].kind = "subsonic-" + subFacets[sfi].kind;
                     subFacets[sfi].badge = root.sub.serverBadge;
+                    // Silent-cap hint: genre plays cap at 500 songs, year /
+                    // decade expansion at 100 albums — say so up front.
+                    if (subFacets[sfi].kind === "subsonic-genre")
+                        subFacets[sfi].subtitle += " · up to 500 songs";
+                    else if (subFacets[sfi].kind === "subsonic-year" || subFacets[sfi].kind === "subsonic-decade")
+                        subFacets[sfi].subtitle += " · first 100 albums";
                 }
                 rows = rows.concat(subFacets);
             }
@@ -1545,7 +1551,11 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
-                root.runSubM3u(Subsonic.genreSongs(sub), "enqueue");
+                var songs = Subsonic.genreSongs(sub);
+                if (songs.length >= 500)
+                    root.notify("amla: genre '" + (root.pendingSubRow ? root.pendingSubRow.title : "") + "' capped at first 500 songs");
+
+                root.runSubM3u(songs, "enqueue");
             }
         }
 
@@ -1565,7 +1575,11 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
-                var albums = Subsonic.yearAlbums(sub).slice(0, 100);
+                var allAlbums = Subsonic.yearAlbums(sub);
+                if (allAlbums.length > 100)
+                    root.notify("amla: " + (root.pendingSubRow ? root.pendingSubRow.title : "year") + " capped at first 100 of " + allAlbums.length + " albums");
+
+                var albums = allAlbums.slice(0, 100);
                 if (albums.length === 0)
                     return ;
 
