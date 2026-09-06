@@ -85,6 +85,7 @@ Item {
     property string subSearchedQuery: ""
     property var subGenres: []
     property var subYears: []
+    property var subPlaylists: []
     // ----- play history (MPRIS watcher + dispatch recording) -----
     property string lastRecordedKey: ""
     property double lastRecordedMs: 0
@@ -127,8 +128,9 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1930"
+    readonly property string buildId: "0.5.1940"
     property string pendingSubAction: ""
+    property string pendingSubTarget: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
     // play uses the native `load` op instead). Set by resolvePlaylistBody,
@@ -266,6 +268,7 @@ Item {
                         subFacets[sfi].subtitle += " · first 100 albums";
                 }
                 rows = rows.concat(subFacets);
+                rows = rows.concat(Subsonic.playlistRows(root.subPlaylists, root.sub.serverBadge, q));
             }
             if (root.searchedQuery === q) {
                 var locals = Catalog.localDbRows(root.searchRows);
@@ -472,6 +475,7 @@ Item {
                 "path": row.path || ""
             };
         case "playlist":
+        case "subsonic-playlist":
             return {
                 "type": "playlist",
                 "artist": "",
@@ -479,7 +483,8 @@ Item {
                 "title": row.title,
                 "display": row.title,
                 "subtitle": row.subtitle || "",
-                "path": row.path || ""
+                "path": row.path || "",
+                "subId": row.id || ""
             };
         default:
             return null;
@@ -716,6 +721,18 @@ Item {
                 cliampResolveProc.running = true;
                 return ;
             }
+            return ;
+        }
+        if (target === "must" && row && row.kind === "subsonic-playlist" && row.id) {
+            // must has no subsonic-playlist resolver: fetch the entries
+            // over REST and hand must the staged stream-URL m3u by path
+            // (its file tier resolves http entries, incl. cold).
+            var mustAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            pendingSubAction = action;
+            pendingSubRow = row;
+            pendingSubTarget = "must";
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, mustAuth, row.id)];
+            subPlaylistProc.running = true;
             return ;
         }
         if (target === "must" && row && row.kind === "playlist" && (row.source === "cliamp" || row.source === "stray")) {
@@ -994,6 +1011,15 @@ Item {
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
             subYearListProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
             subYearListProc.running = true;
+        } else if (row.kind === "subsonic-playlist" && row.id) {
+            // Server-side playlist: one getPlaylist hop, then the shared
+            // file handoff (never a giant env body) — the write completion
+            // dispatches to whichever target armed the fetch.
+            pendingSubAction = action;
+            pendingSubRow = row;
+            pendingSubTarget = root.targetPlayer;
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
+            subPlaylistProc.running = true;
         } else {
             // Id-less album row (e.g. from history): provider.search over
             // "artist album" resolves its tracks without REST.
@@ -1223,7 +1249,7 @@ Item {
         }
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'"];
+            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.playlistsUrl(root.sub.url, auth) + "'"];
             subFacetProc.running = true;
         }
     }
@@ -1484,6 +1510,13 @@ Item {
                 var y = Subsonic.getSubsonic(parts[1] || "");
                 root.subGenres = Subsonic.genreFacets(g);
                 root.subYears = Subsonic.yearFacets(y);
+                try {
+                    var pl = Subsonic.getSubsonic(parts[2] || "");
+                    if (pl)
+                        root.subPlaylists = Subsonic.playlistList(pl);
+
+                } catch (e) {
+                }
                 root.rebuildDisplay();
             }
         }
@@ -1676,6 +1709,67 @@ Item {
         }
         onSaveFailed: function(error) {
             console.log("[amla] year/decade m3u write failed: " + error);
+        }
+    }
+
+    // Server-side playlist expansion: getPlaylist entries → stream-URL
+    // m3u written straight to disk (a big server list would die in the
+    // dispatch env handoff). Playshuffle pre-shuffles (cliamp pins the
+    // loaded head at 0); completion routes by the arming target.
+    Process {
+        id: subPlaylistProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var sub = Subsonic.getSubsonic(String(text || ""));
+                var entries = Subsonic.playlistSongs(sub);
+                if (entries.length === 0) {
+                    root.notify("amla: playlist '" + (root.pendingSubRow ? root.pendingSubRow.title : "") + "' has no playable entries");
+                    return ;
+                }
+                var list = root.pendingSubAction === "playshuffle" ? root.shuffledCopy(entries) : entries;
+                subPlaylistFile.setText(root.subTracksToM3u(list).body);
+            }
+        }
+
+    }
+
+    FileView {
+        id: subPlaylistFile
+
+        path: root.runtimeDir + "/amla/subpl.m3u"
+        atomicWrites: true
+        watchChanges: false
+        printErrors: false
+        onSaved: {
+            var action = root.pendingSubAction || "enqueue";
+            var file = root.runtimeDir + "/amla/subpl.m3u";
+            if (root.pendingSubTarget === "must") {
+                var ctx = {
+                    "mustBin": root.pluginMustBin,
+                    "query": root.filterText,
+                    "resolvedM3u": file
+                };
+                dispatchProc.hist = historyFor(root.pendingSubRow);
+                dispatchProc.script = Dispatch.build(action, root.pendingSubRow, "must", ctx);
+                dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
+                dispatchProc.running = true;
+                return ;
+            }
+            root.runCliamp(root.pendingSubRow, action, {
+                "op": "url.load",
+                "params": {
+                    "path": file,
+                    "play": action === "play"
+                },
+                "clearFirst": action === "play",
+                "insertNext": action === "enqueue-next",
+                "launchTarget": file
+            });
+        }
+        onSaveFailed: function(error) {
+            console.log("[amla] server playlist m3u write failed: " + error);
         }
     }
 

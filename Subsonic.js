@@ -112,6 +112,69 @@ function albumSongs(sub) {
     return sub.album.song
 }
 
+function playlistsUrl(baseUrl, auth) {
+    return apiUrl(baseUrl, "getPlaylists", auth)
+}
+
+function playlistUrl(baseUrl, auth, playlistId) {
+    return apiUrl(baseUrl, "getPlaylist", auth + "&id=" + encodeURIComponent(String(playlistId || "")))
+}
+
+// Subsonic JSON collapses single-element arrays to bare objects —
+// normalize so one-track playlists don't crash the m3u builders.
+function asArray(x) {
+    if (x === undefined || x === null)
+        return []
+    return Array.isArray(x) ? x : [x]
+}
+
+// getPlaylists → [{id, name, n}] for row building.
+function playlistList(sub) {
+    if (!sub || !sub.playlists || !sub.playlists.playlist)
+        return []
+    var out = []
+    var arr = asArray(sub.playlists.playlist)
+    for (var i = 0; i < arr.length; i++)
+        out.push({
+            "id": String(arr[i].id || ""),
+            "name": String(arr[i].name || ""),
+            "n": parseInt(arr[i].songCount, 10) || 0,
+            "coverArt": arr[i].coverArt || ""
+        })
+    return out
+}
+
+// Server-playlist rows surface on typed queries (facet-style: nothing
+// on empty query), matched by name substring.
+function playlistRows(lists, serverBadge, q) {
+    var rows = []
+    var query = String(q || "").toLowerCase()
+    if (query.length === 0)
+        return rows
+    for (var i = 0; i < (lists || []).length; i++) {
+        var name = String(lists[i].name || "")
+        if (name.toLowerCase().indexOf(query) < 0)
+            continue
+        var n = lists[i].n || 0
+        rows.push({
+            "kind": "subsonic-playlist",
+            "badge": serverBadge,
+            "title": name,
+            "subtitle": "playlist · " + n + " track" + (n === 1 ? "" : "s"),
+            "id": lists[i].id || "",
+            "coverArt": lists[i].coverArt || ""
+        })
+    }
+    return rows
+}
+
+// getPlaylist → song entries for m3u building.
+function playlistSongs(sub) {
+    if (!sub || !sub.playlist || !sub.playlist.entry)
+        return []
+    return asArray(sub.playlist.entry)
+}
+
 function randomAlbumUrl(baseUrl, auth) {
     return apiUrl(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
 }
