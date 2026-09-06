@@ -114,14 +114,25 @@ Item {
     property bool searchDirty: false
     readonly property string filesDb: home + "/.cache/amla/files.db"
     readonly property string mustDb: home + "/.cache/must/library.db"
-    readonly property string playlistDir: home + "/.cache/must/playlists"
+    readonly property string playlistDir: (Quickshell.env("XDG_CACHE_HOME") || home + "/.cache") + "/must/playlists"
+    // cliamp playlist dir mirrors cliamp's own resolution
+    // (docs/playlists.md): CLIAMP_CONFIG_DIR, then
+    // XDG_CONFIG_HOME/cliamp, then ~/.config/cliamp.
+    readonly property string cliampPlaylistDir: (Quickshell.env("CLIAMP_CONFIG_DIR") || ((Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/cliamp")) + "/playlists"
     readonly property string artCacheDir: home + "/.cache/amla/art"
     readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + home.split("/").pop())
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1850"
+    readonly property string buildId: "0.5.1860"
     property string pendingSubAction: ""
+    // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
+    // for must-target plays/enqueues and cliamp-target enqueues (cliamp
+    // play uses the native `load` op instead). Set by resolveTomlPlaylist,
+    // consumed by completeTomlPlaylist.
+    property var pendingPlaylistRow: null
+    property string pendingPlaylistAction: ""
+    property string pendingPlaylistTarget: ""
     property bool randomFallbackLocal: false
     property var pendingSubRow: null
     // Cold subsonic-album play retry (P3): set by dispatchSubsonicCliamp
@@ -630,6 +641,23 @@ Item {
                 return ;
             }
             if (row.kind === "playlist") {
+                if (row.source === "cliamp") {
+                    // Native toml load: replaces the live playlist and
+                    // starts it in one call (no m3u round-trip). Enqueues
+                    // have no native op — synthesize an m3u first.
+                    if (action === "enqueue" || action === "enqueue-next") {
+                        root.resolveTomlPlaylist(row, action);
+                        return ;
+                    }
+                    runCliamp(row, action, {
+                        "op": "load",
+                        "params": {
+                            "playlist": row.title
+                        },
+                        "plName": row.title
+                    });
+                    return ;
+                }
                 // url.load resolves the m3u (relative paths from its dir).
                 runCliamp(row, action, {
                     "op": "url.load",
@@ -670,6 +698,12 @@ Item {
                 cliampResolveProc.running = true;
                 return ;
             }
+            return ;
+        }
+        if (target === "must" && row && row.kind === "playlist" && row.source === "cliamp") {
+            // must cannot read cliamp's toml format: synthesize an m3u
+            // first, then dispatch must play/enqueue on the file.
+            root.resolveTomlPlaylist(row, action);
             return ;
         }
         dispatchProc.script = Dispatch.build(action, row, target, ctx);
@@ -767,6 +801,75 @@ Item {
             "clearFirst": action === "play",
             "insertNext": action === "enqueue-next",
             "m3uBody": m.body,
+            "launchTarget": m3u
+        });
+    }
+
+    function notify(msg) {
+        notifyProc.environment = {
+            "AMLA_MSG": String(msg || "")
+        };
+        notifyProc.command = ["/usr/bin/sh", "-c", "/usr/bin/notify-send -a amla 'amla' \"$AMLA_MSG\" >/dev/null 2>&1 &"];
+        notifyProc.running = true;
+    }
+
+    // cliamp toml → m3u synthesis (§15a): `playlist show --json` is the
+    // authoritative expansion ([[track]] + [[dir]] + ~ + env). Local
+    // files go as bare paths (cliamp tag-probes them: full metadata +
+    // album grouping, which a wholesale EXTINF title would destroy);
+    // http entries keep EXTINF duration/title (untaggable streams — a
+    // bare URL renders as the bare host). Completion routes must-target
+    // to Dispatch via ctx.resolvedM3u, cliamp-target to url.load + m3u.
+    function resolveTomlPlaylist(row, action) {
+        if (playlistResolveProc.running)
+            return ;
+
+        root.pendingPlaylistRow = row;
+        root.pendingPlaylistAction = action;
+        root.pendingPlaylistTarget = root.targetPlayer;
+        playlistResolveProc.environment = {
+            "AMLA_PL_NAME": String(row.title || "")
+        };
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/command -v jq >/dev/null 2>&1 || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\""];
+        playlistResolveProc.running = true;
+    }
+
+    function completeTomlPlaylist(text) {
+        var row = root.pendingPlaylistRow;
+        var action = root.pendingPlaylistAction || "play";
+        var target = root.pendingPlaylistTarget || "cliamp";
+        root.pendingPlaylistRow = null;
+        if (!row) {
+            root.notify("amla: playlist resolution lost its row — try again");
+            return ;
+        }
+        var body = String(text || "").trim();
+        if (body.length === 0 || body === "#EXTM3U") {
+            root.notify("amla: could not read cliamp playlist '" + row.title + "' (needs cliamp + jq) or it is empty");
+            return ;
+        }
+        if (target === "must") {
+            var ctx = {
+                "mustBin": root.pluginMustBin,
+                "query": root.filterText,
+                "resolvedM3u": Quickshell.env("XDG_RUNTIME_DIR") + "/amla/pl.m3u"
+            };
+            dispatchProc.hist = historyFor(row);
+            dispatchProc.script = Dispatch.build(action, row, target, ctx);
+            dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
+            dispatchProc.running = true;
+            return ;
+        }
+        var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
+        root.runCliamp(row, action, {
+            "op": "url.load",
+            "params": {
+                "path": m3u,
+                "play": action === "play"
+            },
+            "clearFirst": action === "play",
+            "insertNext": action === "enqueue-next",
+            "m3uBody": body,
             "launchTarget": m3u
         });
     }
@@ -1039,7 +1142,7 @@ Item {
     }
 
     function refreshListings() {
-        listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.libraryRoots.tempDirs, root.playlistDir, root.libraryRoots.musicDirs)];
+        listingProc.command = ["/usr/bin/sh", "-c", Catalog.listingCommand(root.libraryRoots.tempDirs, root.playlistDir, root.libraryRoots.musicDirs, root.cliampPlaylistDir)];
         listingProc.running = true;
     }
 
@@ -1278,6 +1381,22 @@ Item {
             }
         }
 
+    }
+
+    Process {
+        id: playlistResolveProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                root.completeTomlPlaylist(text);
+            }
+        }
+
+    }
+
+    Process {
+        id: notifyProc
     }
 
     Process {

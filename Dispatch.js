@@ -110,10 +110,25 @@ function build(action, row, target, ctx) {
         }
         if (action === "playshuffle") {
             var psq = row && row.kind !== "action" && row.title ? row.title : (ctx.query || "")
-            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" playshuffle " + shq(psq) +
-                "\nelse\n  " + launchVerb("playshuffle " + shq(psq)) + "\nfi"
+            // Playlist rows shuffle their own contents: must's ctlPlay
+            // shuffles whatever it resolves, so hand it the playlist
+            // resolver (saved name) or the synthesized m3u (toml source)
+            // instead of a free-text query, which would FTS-miss.
+            var psArgs = "playshuffle " + shq(psq)
+            if (row && row.kind === "playlist") {
+                if (ctx.resolvedM3u)
+                    psArgs = "playshuffle " + shq(ctx.resolvedM3u)
+                else if (row.source !== "cliamp")
+                    psArgs = "playshuffle " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, ""))
+            }
+            return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + psArgs +
+                "\nelse\n  " + launchVerb(psArgs) + "\nfi"
         }
         var res = mustResolver(row)
+        // toml playlists reach must as a synthesized m3u (must cannot
+        // read cliamp's format); the QML side resolves it first.
+        if (row && row.kind === "playlist" && ctx.resolvedM3u)
+            res = shq(ctx.resolvedM3u)
         if (res.length === 0)
             return "exit 1"
         if (action === "play") {
@@ -122,7 +137,9 @@ function build(action, row, target, ctx) {
             // (silent empty playlist). Files/dirs instead go as launch args
             // (loadCLIPaths + --play); prefixed resolvers keep the ctl verb.
             var launchArgs
-            if ((row.kind === "song" || row.kind === "temp" || row.kind === "library") && row.path)
+            if (ctx.resolvedM3u && row.kind === "playlist")
+                launchArgs = shq(ctx.resolvedM3u) + " --play"
+            else if ((row.kind === "song" || row.kind === "temp" || row.kind === "library") && row.path)
                 launchArgs = shq(row.path) + " --play"
             else if (row.kind === "playlist")
                 launchArgs = "play " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, "")) + " --play"
@@ -193,7 +210,12 @@ function build(action, row, target, ctx) {
     // without `remote`. Notifies and fails so history never records a no-op.
     var guard = "if [ ! -x /usr/bin/cliamp ] && ! command -v cliamp >/dev/null 2>&1; then\n  " + notify("amla: cliamp not found — install it (check options with yay -Ss cliamp) or press Ctrl+T for must") + "\n  exit 1\nfi\nif ! /usr/bin/cliamp remote --help >/dev/null 2>&1 && ! cliamp remote --help >/dev/null 2>&1; then\n  " + notify("amla: cliamp v2+ required for playback — upgrade cliamp (check options with yay -Ss cliamp). Catalog still browsable; or press Ctrl+T for must") + "\n  exit 1\nfi\n"
     var launch
-    if (action === "play" && String(ctx.launchTarget || "").length > 0)
+    if (action === "play" && ctx.plName)
+        // Native toml load: the cold TUI opens directly on the named
+        // playlist (--shuffle/--no-shuffle mirrors the running path's
+        // explicit pin, since cliamp persists shuffle to config.toml).
+        launch = "  " + LAUNCH + " --playlist " + shq(String(ctx.plName)) + " --auto-play " + (ctx.shuffleAfter ? "--shuffle" : "--no-shuffle") + " >/dev/null 2>&1 &"
+    else if (action === "play" && String(ctx.launchTarget || "").length > 0)
         // --no-shuffle: cold launch must not inherit persisted shuffle=on
         // from config.toml (see shuffleOffAfter above for the running case).
         // Cold playshuffle (ctx.shuffleAfter) launches shuffled instead.

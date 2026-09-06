@@ -159,11 +159,12 @@ function filesSearchSql(q) {
 }
 
 // Temp albums + playlists + library dirs in one shell pass.
-// T<path>, P<path> and L<path> lines. Library dirs are depth 1-2 under
+// T<path> and L<path> lines; P<count>\t<path> (must m3u, exact entries)
+// and C<count>[+]\t<path> (cliamp toml, + when [[dir]]-backed). Library dirs are depth 1-2 under
 // each music root (covers flat "Artist - Album" and nested
 // "Artist/Album" layouts); bucket dirs are harmless — they play the
 // whole subtree via url.load, and the file index supersedes them later.
-function listingCommand(tempDirs, playlistDir, musicDirs) {
+function listingCommand(tempDirs, playlistDir, musicDirs, cliampPlaylistDir) {
   var dirs = []
   for (var i = 0; i < tempDirs.length; i++)
     dirs.push(String(tempDirs[i]).replace(/'/g, "'\\''"))
@@ -171,8 +172,19 @@ function listingCommand(tempDirs, playlistDir, musicDirs) {
   for (var j = 0; j < dirs.length; j++) {
     cmd += "/usr/bin/find '" + dirs[j] + "' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | /usr/bin/sed 's/^/T/' | /usr/bin/sort -f;"
   }
-  if (playlistDir)
-    cmd += "/usr/bin/ls -1 '" + String(playlistDir).replace(/'/g, "'\\''") + "'/*.m3u 2>/dev/null | /usr/bin/sed 's/^/P/';"
+  if (playlistDir) {
+    // must m3u dir: one P<count>\t<path> line per playlist; the count is
+    // the entry lines (non-# non-blank), shown in the subtitle.
+    var pd = String(playlistDir).replace(/'/g, "'\\''")
+    cmd += "for f in '" + pd + "'/*.m3u '" + pd + "'/*.m3u8 '" + pd + "'/*.M3U '" + pd + "'/*.M3U8; do [ -e \"$f\" ] || continue; printf 'P%d\\t%s\\n' \"$(/usr/bin/grep -cv -e '^#' -e '^$' \"$f\")\" \"$f\"; done;"
+  }
+  if (cliampPlaylistDir) {
+    // cliamp toml dir: one C<count>[+]\t<path> line per playlist.
+    // [[track]] sections are exact; a [[dir]] source scans at load so
+    // the count is a lower bound, marked with +.
+    var cd = String(cliampPlaylistDir).replace(/'/g, "'\\''")
+    cmd += "for f in '" + cd + "'/*.toml '" + cd + "'/*.TOML; do [ -e \"$f\" ] || continue; n=$(/usr/bin/grep -c '^\\[\\[track\\]\\]' \"$f\"); d=''; /usr/bin/grep -q '^\\[\\[dir\\]\\]' \"$f\" && d='+'; printf 'C%s%s\\t%s\\n' \"$n\" \"$d\" \"$f\"; done;"
+  }
   var roots = []
   for (var k = 0; k < (musicDirs || []).length; k++)
     roots.push(String(musicDirs[k]).replace(/'/g, "'\\''"))
@@ -254,8 +266,9 @@ JsonDecoder.prototype.nextArray = function () {
   return null
 }
 
-// listingCommand output → { temp: [paths], playlists: [paths],
-// library: [paths] }
+// listingCommand output → { temp: [paths], playlists: [{ path, source,
+// count, dirBacked }], library: [paths] }. P = must m3u (count exact),
+// C = cliamp toml (count = [[track]] sections, + when [[dir]] backed).
 function parseListing(out) {
   var temp = []
   var playlists = []
@@ -269,9 +282,24 @@ function parseListing(out) {
     var p = line.substring(1)
     if (tag === "T")
       temp.push(p)
-    else if (tag === "P")
-      playlists.push(p)
-    else if (tag === "L")
+    else if (tag === "P" || tag === "C") {
+      var tab = p.indexOf("\t")
+      var count = -1
+      var dirBacked = false
+      var pp = p
+      if (tab >= 0) {
+        var num = p.substring(0, tab)
+        if (num.charAt(num.length - 1) === "+") {
+          dirBacked = true
+          num = num.substring(0, num.length - 1)
+        }
+        count = parseInt(num, 10)
+        if (isNaN(count))
+          count = -1
+        pp = p.substring(tab + 1)
+      }
+      playlists.push({ path: pp, source: tag === "C" ? "cliamp" : "must", count: count, dirBacked: dirBacked })
+    } else if (tag === "L")
       library.push(p)
   }
   return { temp: temp, playlists: playlists, library: library }
@@ -450,15 +478,22 @@ function listingRows(listing, q, noiseTokens) {
   var rows = []
   for (var i = 0; i < listing.playlists.length; i++) {
     var pl = listing.playlists[i]
-    var name = basename(pl).replace(/\.(m3u8?|M3U8?)$/, "")
-    if (query.length === 0 || name.toLowerCase().indexOf(query) >= 0)
+    var name = basename(pl.path).replace(/\.(m3u8?|M3U8?|toml|TOML)$/, "")
+    if (query.length === 0 || name.toLowerCase().indexOf(query) >= 0) {
+      // Counts come from the listing pass (m3u entries exact, toml
+      // [[track]] sections with + when [[dir]]-backed and unbounded).
+      var n = pl.count >= 0 ? String(pl.count) + (pl.dirBacked ? "+" : "") : "?"
+      var unit = (!pl.dirBacked && pl.count === 1) ? " track" : " tracks"
       rows.push({
         kind: "playlist",
         badge: "",
         title: name,
-        subtitle: "playlist",
-        path: pl
+        subtitle: "playlist · " + n + unit + " · " + pl.source,
+        path: pl.path,
+        source: pl.source,
+        count: pl.count
       })
+    }
   }
 
   for (i = 0; i < listing.temp.length; i++) {
