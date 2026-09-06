@@ -126,6 +126,46 @@ function pathsForKindM3uSql(kind, row, randomOrder, table) {
     return "SELECT path FROM " + t + " LIMIT 0"
 }
 
+// Track list for an MPD dispatch: same filters as pathsForKindM3uSql
+// but bare paths (one per row) — the helper maps them into
+// music_directory-relative URIs. Playshuffle needs no SQL pre-shuffle:
+// the daemon shuffles server-side.
+function pathsForKindSql(kind, row, table) {
+    var t = table || "tracks"
+    var v = String(row.title || "").replace(/'/g, "''")
+    var albumOrder = "ORDER BY album, track_num"
+    var trackOrder = "ORDER BY track_num"
+    if (kind === "artist")
+        return "SELECT path FROM " + t + " WHERE COALESCE(NULLIF(album_artist,''), artist) = '" + v + "' COLLATE NOCASE " + albumOrder
+    if (kind === "album") {
+        var a = String(row.artist || "").replace(/'/g, "''")
+        var where = "album = '" + v + "' COLLATE NOCASE"
+        if (a.length > 0)
+            where += " AND COALESCE(NULLIF(album_artist,''), artist) = '" + a + "' COLLATE NOCASE"
+        return "SELECT path FROM " + t + " WHERE " + where + " " + trackOrder
+    }
+    if (kind === "genre")
+        return "SELECT path FROM " + t + " WHERE genre = '" + v + "' COLLATE NOCASE " + albumOrder
+    if (kind === "year")
+        return "SELECT path FROM " + t + " WHERE CAST(year AS TEXT) = '" + v + "' " + albumOrder
+    if (kind === "decade")
+        return "SELECT path FROM " + t + " WHERE year BETWEEN " + (parseInt(row.decade, 10) || 0) + " AND " + ((parseInt(row.decade, 10) || 0) + 9) + " " + albumOrder
+    return "SELECT path FROM " + t + " LIMIT 0"
+}
+
+// Directory expansion for MPD temp/library rows: audio files under dir.
+// LIKE metacharacters escaped (underscores are common in dir names);
+// the extension filter keeps stray art/text out of the queue.
+function pathsUnderDirSql(dir, table) {
+    var t = table || "tracks"
+    var d = String(dir || "").replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")
+    var ext = ["mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wav", "aiff", "ape", "wv"]
+    var conds = []
+    for (var i = 0; i < ext.length; i++)
+        conds.push("path LIKE '%." + ext[i] + "' COLLATE NOCASE")
+    return "SELECT path FROM " + t + " WHERE path LIKE '" + d + "/%' ESCAPE '\\' AND (" + conds.join(" OR ") + ") ORDER BY path"
+}
+
 // Facets: full genre + year lists, fetched once per popup open.
 function facetSql() {
   return "SELECT genre AS g, COUNT(DISTINCT album) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +

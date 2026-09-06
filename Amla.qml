@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1970"
+    readonly property string buildId: "0.5.1980"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -136,6 +136,11 @@ Item {
     property string mustVersion: ""
     // MPD liveness (§18): -1 unknown (probe unanswered), 0 down, 1 up.
     property int mpdAlive: -1
+    // MPD dispatch staging (§18 phase 2): resolve procs and the queue
+    // FileView share one pending row/action across async hops.
+    property var pendingMpdRow: null
+    property string pendingMpdAction: ""
+    property bool pendingMpdRandom: false
     // Session upgrade nudge: fired once when falling back on a
     // positively-old must (never for unknown versions, never twice).
     property bool mustNudged: false
@@ -785,6 +790,49 @@ Item {
             }
             return ;
         }
+        if (target === "mpd" && row) {
+            // Local matrix (§18 phase 2): exact catalog paths queue by
+            // MPD-relative URI. Subsonic rows wait for phase 3 (stream
+            // URLs + metadata preload).
+            if (String(row.kind || "").indexOf("subsonic-") === 0) {
+                root.notify("amla: subsonic via MPD arrives next — local library plays today");
+                return ;
+            }
+            if (String(action || "").indexOf("random-album") === 0) {
+                root.dispatchMpdRandom(action);
+                return ;
+            }
+            if (row.kind === "song") {
+                if (!row.path)
+                    return ;
+
+                root.runMpd(row, action, [row.path]);
+                return ;
+            }
+            if (row.kind === "temp" || row.kind === "library" || row.kind === "album" || row.kind === "artist" || row.kind === "genre" || row.kind === "year" || row.kind === "decade") {
+                // Facet/dir rows resolve to absolute paths via the local
+                // DB (single tier — localDbPath already picks files vs
+                // must per useFilesIndex).
+                root.pendingMpdAction = action;
+                root.pendingMpdRow = row;
+                var msql = (row.kind === "temp" || row.kind === "library") ? Catalog.pathsUnderDirSql(row.path, root.localDbTable()) : Catalog.pathsForKindSql(row.kind, row, root.localDbTable());
+                mpdResolveProc.environment = {
+                    "PATH": "/usr/bin:/bin",
+                    "AMLA_DB": root.localDbPath(),
+                    "AMLA_SQL": msql
+                };
+                mpdResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly -noheader -list \"$AMLA_DB\" \"$AMLA_SQL\""];
+                mpdResolveProc.running = true;
+                return ;
+            }
+            if (row.kind === "playlist") {
+                // resolvePlaylistBody writes $R/pl.m3u with dir-resolved
+                // absolute paths; completePlaylistBody routes mpd on.
+                root.resolvePlaylistBody(row, action);
+                return ;
+            }
+            return ;
+        }
         // Native path (must >= v0.2.4, or dev) falls through to
         // Dispatch.build, whose mustResolver emits
         // subsonic:playlist:'<id>'. Older/unknown must takes the
@@ -819,6 +867,79 @@ Item {
     // Generic cliamp v2 dispatch: one remote call; op name and params JSON
     // passed via env (nothing is shell-quoted). m3uBody (optional) is written
     // to $XDG_RUNTIME_DIR/amla/queue.m3u before the call.
+    // mpd_queue.py ships at plugin top level (same as index-library.py).
+    function mpdHelperPath() {
+        var u = String(Qt.resolvedUrl("mpd_queue.py"));
+        if (u.indexOf("file://") === 0)
+            u = u.substring(7);
+
+        return u;
+    }
+
+    // MPD dispatch (§18 phase 2): absolute catalog paths → staged queue
+    // JSON (FileView write, never a giant env var) → helper run. Empty
+    // material notifies here so history never records a no-op.
+    function runMpd(row, action, absPaths) {
+        var paths = [];
+        for (var i = 0; i < (absPaths || []).length; i++) {
+            var p = String(absPaths[i] || "").trim();
+            if (p.length > 0 && p.charAt(0) === "/")
+                paths.push(p);
+
+        }
+        if (paths.length === 0) {
+            root.notify("amla: nothing playable for '" + (row.title || action) + "' (MPD)");
+            return ;
+        }
+        root.pendingMpdRow = row;
+        root.pendingMpdAction = action;
+        var tracks = [];
+        for (var j = 0; j < paths.length; j++) tracks.push({
+            "uri": paths[j]
+        })
+        mpdQueueFile.setText(JSON.stringify({
+            "tracks": tracks,
+            "insertNext": action === "enqueue-next"
+        }));
+    }
+
+    // MPD random-album (§18 phase 2): local-only pick. Combined
+    // random-album stays local until phase 3 brings server material;
+    // random-album-temp expands a temp dir like a temp row.
+    function dispatchMpdRandom(action) {
+        var scope = action === "random-album" ? "local" : action.substring("random-album-".length);
+        if (scope === "temp") {
+            var temps = (root.listing && root.listing.temp) || [];
+            if (temps.length === 0)
+                return ;
+
+            var dir = temps[Math.floor(Math.random() * temps.length)];
+            root.pendingMpdAction = "play";
+            root.pendingMpdRow = {
+                "kind": "temp",
+                "title": Catalog.basename(dir),
+                "path": dir
+            };
+            mpdResolveProc.environment = {
+                "PATH": "/usr/bin:/bin",
+                "AMLA_DB": root.localDbPath(),
+                "AMLA_SQL": Catalog.pathsUnderDirSql(dir, root.localDbTable())
+            };
+            mpdResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly -noheader -list \"$AMLA_DB\" \"$AMLA_SQL\""];
+            mpdResolveProc.running = true;
+            root.cancel();
+            return ;
+        }
+        if (scope !== "local") {
+            root.notify("amla: random " + scope + " via MPD arrives with subsonic (phase 3)");
+            return ;
+        }
+        root.pendingMpdRandom = true;
+        randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.localDbPath() + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM " + root.localDbTable() + " WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
+        randomAlbumProc.running = true;
+        root.cancel();
+    }
+
     function runCliamp(row, action, ctx) {
         // Alt+Enter playshuffle: same clear-first load as play, then the
         // script switches shuffle explicitly on (ctx.shuffleAfter).
@@ -978,6 +1099,22 @@ Item {
             dispatchProc.script = Dispatch.build(action, row, target, ctx);
             dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
             dispatchProc.running = true;
+            return ;
+        }
+        if (target === "mpd") {
+            // Local entries only: resolvePlaylistBody already normalized
+            // relative entries against the m3u dir; server/stream
+            // entries wait for phase 3. Daemon shuffles playshuffle.
+            var lines = body.split("\n");
+            var ppaths = [];
+            for (var pi = 0; pi < lines.length; pi++) {
+                var pl = lines[pi].trim();
+                if (pl.length === 0 || pl.charAt(0) === "#" || pl.indexOf("://") >= 0)
+                    continue;
+
+                ppaths.push(pl);
+            }
+            root.runMpd(row, action, ppaths);
             return ;
         }
         var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
@@ -1427,6 +1564,21 @@ Item {
                     "album": rows[0].album,
                     "artist": rows[0].a || ""
                 };
+                // MPD random-album: resolve the pick through the MPD
+                // path flow instead of the cliamp m3u flow below.
+                if (root.pendingMpdRandom) {
+                    root.pendingMpdRandom = false;
+                    root.pendingMpdAction = "play";
+                    root.pendingMpdRow = picked;
+                    mpdResolveProc.environment = {
+                        "PATH": "/usr/bin:/bin",
+                        "AMLA_DB": root.localDbPath(),
+                        "AMLA_SQL": Catalog.pathsForKindSql("album", picked, root.localDbTable())
+                    };
+                    mpdResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly -noheader -list \"$AMLA_DB\" \"$AMLA_SQL\""];
+                    mpdResolveProc.running = true;
+                    return ;
+                }
                 root.pendingSubAction = "play";
                 root.pendingSubRow = picked;
                 cliampResolveProc.environment = {
@@ -1864,6 +2016,61 @@ Item {
 
         onExited: function(exitCode) {
             root.mpdAlive = exitCode === 0 ? 1 : 0;
+        }
+    }
+
+    // MPD facet/dir resolution (§18 phase 2): sqlite emits one absolute
+    // path per line; runMpd stages and dispatches (empty → notify).
+    Process {
+        id: mpdResolveProc
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                if (!root.pendingMpdRow)
+                    return ;
+
+                var paths = [];
+                var lines = String(text || "").split("\n");
+                for (var i = 0; i < lines.length; i++) {
+                    var l = lines[i].trim();
+                    if (l.length > 0)
+                        paths.push(l);
+
+                }
+                root.runMpd(root.pendingMpdRow, root.pendingMpdAction || "enqueue", paths);
+            }
+        }
+
+    }
+
+    // MPD queue staging (§18 phase 2): FileView write (never a giant env
+    // var) → helper dispatch. History records on exit 0, same as the
+    // other targets.
+    FileView {
+        id: mpdQueueFile
+
+        path: root.runtimeDir + "/amla/mpd_queue.json"
+        atomicWrites: true
+        watchChanges: false
+        printErrors: false
+        onSaved: {
+            var ctx = {
+                "mustBin": root.pluginMustBin,
+                "query": root.filterText,
+                "mpdHost": (root.amlaPluginCfg && root.amlaPluginCfg.mpdHost) || "",
+                "mpdPort": (root.amlaPluginCfg && root.amlaPluginCfg.mpdPort) || 0,
+                "helper": root.mpdHelperPath(),
+                "queueFile": root.runtimeDir + "/amla/mpd_queue.json",
+                "stripPrefixes": (root.libraryRoots && root.libraryRoots.musicDirs) || []
+            };
+            dispatchProc.hist = historyFor(root.pendingMpdRow);
+            dispatchProc.script = Dispatch.build(root.pendingMpdAction || "play", root.pendingMpdRow, "mpd", ctx);
+            dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
+            dispatchProc.running = true;
+        }
+        onSaveFailed: function(error) {
+            console.log("[amla] mpd queue write failed: " + error);
         }
     }
 

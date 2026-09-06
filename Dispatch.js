@@ -203,17 +203,37 @@ function build(action, row, target, ctx) {
             "\n  " + launchVerb("") + "\n  exit 1\nfi"
     }
 
-    // ----- mpd target (§18 roadmap) -----
-    // Phase 1: plumbing only (target selection, liveness probe, guards).
-    // Playback arrives next; until then the guards explain exactly why
-    // nothing played, and history never records (exit 1 throughout).
+    // ----- mpd target (§18) -----
+    // Queue-by-exact-path over one python helper connection (mpc over TCP
+    // cannot touch local files, and per-track mpc forks are slow): guards
+    // first, then mpd_queue.py [--clear] [--shuffle] [--random ..] [--play]
+    // over the staged queue file. Helper exit 4 = nothing inside the
+    // library (stale roots). History records on exit 0 only. Subsonic
+    // rows never reach here (QML routes them to phase 3).
     if (target === "mpd") {
         var mpdHost = String(ctx.mpdHost || "localhost")
         var mpdPort = String(ctx.mpdPort || "6600")
+        var mpdHelper = String(ctx.helper || "")
+        var mpdQf = String(ctx.queueFile || "")
+        var mpdRoots = ctx.stripPrefixes || []
+        var mpdFlags = ""
+        if (action === "play")
+            mpdFlags = " --clear --random off --play"
+        else if (action === "playshuffle")
+            mpdFlags = " --clear --shuffle --play"
+        var mpdStrip = ""
+        for (var mpi = 0; mpi < mpdRoots.length; mpi++) {
+            if (String(mpdRoots[mpi]).length > 0)
+                mpdStrip += " --strip-prefix " + shq(String(mpdRoots[mpi]))
+        }
         return "export MPD_HOST=" + shq(mpdHost) + " MPD_PORT=" + shq(mpdPort) + "\n  " +
             "if ! command -v mpc >/dev/null 2>&1; then\n  " + notify("amla: mpc not found — install it (Arch: extra/mpc) for MPD playback") + "\n  exit 1\nfi\n" +
             "if ! mpc status >/dev/null 2>&1; then\n  " + notify("amla: MPD not reachable at " + mpdHost + ":" + mpdPort + " — start it (systemctl --user start mpd)") + "\n  exit 1\nfi\n" +
-            notify("amla: MPD playback lands in the next build — target remembered") + "\n  exit 1"
+            "if [ ! -x /usr/bin/python3 ]; then\n  " + notify("amla: python3 not found — needed for MPD queueing") + "\n  exit 1\nfi\n" +
+            "if [ ! -f " + shq(mpdHelper) + " ]; then\n  " + notify("amla: MPD helper missing from plugin dir — reinstall amla") + "\n  exit 1\nfi\n" +
+            "if [ ! -f " + shq(mpdQf) + " ]; then\n  " + notify("amla: MPD queue file missing — try again") + "\n  exit 1\nfi\n" +
+            "/usr/bin/python3 " + shq(mpdHelper) + " --queue-file " + shq(mpdQf) + mpdStrip + mpdFlags + "\n" +
+            "ST=$?\n  if [ \"$ST\" -eq 4 ]; then\n  " + notify("amla: none of those tracks live inside MPD's library — check music_directory") + "\n  fi\n  exit $ST"
     }
 
     // ----- cliamp target (v2 IPC) -----
