@@ -108,8 +108,10 @@ case-insensitively at either dir level, so `"rips"` keeps `Music/rips/Dylan/...`
 from parsing `rips` as the artist. A flat `Artist - Album` dirname is
 exempt (the exact ` - ` separator declares the whole name). Words are
 trimmed, empties ignored, commas allowed. `noiseTokens` likewise extends
-the trailing ` - token` segments stripped from album dir names
-(codecs, sources: `24 bit`, `vinyl`, `320`…).
+the trailing words stripped from album-dir segments
+(codecs, sources: `24 bit`, `vinyl`, `320`…) — each token is a regex
+matched against one whole trailing word, case-insensitively, one
+entry per flag so commas (e.g. `x{2,3}`) survive too.
 
 Player configs that also feed the chain:
 

@@ -8,7 +8,7 @@ per file — that is ~95% of the speed difference measured in the plan).
 
 Usage:
   index-library.py --db ~/.cache/amla/files.db [--tagger auto|path|mutagen|ffprobe]
-                   [--extra-buckets w] [--extra-noise x,y] <root>...
+                   [--extra-buckets w] [--extra-noise tok] <root>...
 
 Prints one JSON summary line to stdout; exit 0 on success (per-file
 errors are skipped, never fatal), exit 2 on fatal errors. Never touches
@@ -90,9 +90,8 @@ def parse_args(argv):
     ap.add_argument("--extra-buckets", default=[], action="append",
                     help="extra bucket dir name, exact match (repeat the "
                          "flag; commas allowed); matched case-insensitively")
-    ap.add_argument("--extra-noise", default="",
-                    help="comma-separated extra noise tokens (regex, "
-                         "matched whole-segment case-insensitively)")
+    ap.add_argument("--extra-noise", default=[], action="append",
+                    help="extra noise token (regex, repeat the flag; commas allowed); matched whole-segment case-insensitively")
     ap.add_argument("roots", nargs="+", help="music root directories")
     return ap.parse_args(argv)
 
@@ -367,9 +366,9 @@ def main(argv):
         if str(chunk).strip():
             buckets.add(str(chunk).strip().lower())
     extra_res = []
-    for n in args.extra_noise.split(","):
-        if n.strip():
-            extra_res.append(re.compile(r"^(?:%s)$" % n.strip(),
+    for n in args.extra_noise:
+        if str(n).strip():
+            extra_res.append(re.compile(r"^(?:%s)$" % str(n).strip(),
                                         re.IGNORECASE))
     try:
         reader = TagReader(args.tagger)

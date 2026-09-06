@@ -127,7 +127,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1910"
+    readonly property string buildId: "0.5.1920"
     property string pendingSubAction: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
@@ -1173,9 +1173,14 @@ Item {
             return w.length > 0;
         });
         for (var bwi = 0; bwi < bw.length; bwi++) cmd.push("--extra-buckets", bw[bwi])
-        if ((pc.noiseTokens || []).length > 0)
-            cmd = cmd.concat(["--extra-noise", pc.noiseTokens.join(",")]);
-
+        // Noise tokens: same one-flag-per-token transport (a regex may
+        // contain commas); trimmed, empties dropped.
+        var nt = (pc.noiseTokens || []).map(function(w) {
+            return String(w).trim();
+        }).filter(function(w) {
+            return w.length > 0;
+        });
+        for (var nti = 0; nti < nt.length; nti++) cmd.push("--extra-noise", nt[nti])
         console.log("[amla] index build (" + (reason || "auto") + "): " + cmd.join(" "));
         indexBuildProc.command = cmd.concat(roots);
         indexBuildProc.running = true;
@@ -2245,7 +2250,10 @@ Item {
                         Text {
                             id: badgeLabel
 
-                            text: root.targetPlayer
+                            // Debug affordance: the badge declares the
+                            // must-less simulation ONLY when the debug flag is
+                            // set. Genuine no-must installs read plain `cliamp`.
+                            text: root.debugNoMust() ? root.targetPlayer + " · no-must" : root.targetPlayer
                             color: Color.menu.selectedText
                             font.family: Style.font.family
                             font.pixelSize: Style.font.bodySmall
