@@ -128,9 +128,8 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1940"
+    readonly property string buildId: "0.5.1950"
     property string pendingSubAction: ""
-    property string pendingSubTarget: ""
     // toml playlist synthesis (§15a): cliamp `playlist show --json` → m3u
     // for must-target plays/enqueues and cliamp-target enqueues (cliamp
     // play uses the native `load` op instead). Set by resolvePlaylistBody,
@@ -723,18 +722,6 @@ Item {
             }
             return ;
         }
-        if (target === "must" && row && row.kind === "subsonic-playlist" && row.id) {
-            // must has no subsonic-playlist resolver: fetch the entries
-            // over REST and hand must the staged stream-URL m3u by path
-            // (its file tier resolves http entries, incl. cold).
-            var mustAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            pendingSubAction = action;
-            pendingSubRow = row;
-            pendingSubTarget = "must";
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, mustAuth, row.id)];
-            subPlaylistProc.running = true;
-            return ;
-        }
         if (target === "must" && row && row.kind === "playlist" && (row.source === "cliamp" || row.source === "stray")) {
             // must cannot read cliamp's toml format (and knows stray files only
             // by path, not by saved name): synthesize an m3u
@@ -1017,7 +1004,6 @@ Item {
             // dispatches to whichever target armed the fetch.
             pendingSubAction = action;
             pendingSubRow = row;
-            pendingSubTarget = root.targetPlayer;
             subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
             subPlaylistProc.running = true;
         } else {
@@ -1712,10 +1698,11 @@ Item {
         }
     }
 
-    // Server-side playlist expansion: getPlaylist entries → stream-URL
-    // m3u written straight to disk (a big server list would die in the
-    // dispatch env handoff). Playshuffle pre-shuffles (cliamp pins the
-    // loaded head at 0); completion routes by the arming target.
+    // Server-side playlist expansion (cliamp target; must resolves
+    // natively via subsonic:playlist:<id>): getPlaylist entries →
+    // stream-URL m3u written straight to disk (a big server list would
+    // die in the dispatch env handoff). Playshuffle pre-shuffles
+    // (cliamp pins the loaded head at 0).
     Process {
         id: subPlaylistProc
 
@@ -1745,18 +1732,6 @@ Item {
         onSaved: {
             var action = root.pendingSubAction || "enqueue";
             var file = root.runtimeDir + "/amla/subpl.m3u";
-            if (root.pendingSubTarget === "must") {
-                var ctx = {
-                    "mustBin": root.pluginMustBin,
-                    "query": root.filterText,
-                    "resolvedM3u": file
-                };
-                dispatchProc.hist = historyFor(root.pendingSubRow);
-                dispatchProc.script = Dispatch.build(action, root.pendingSubRow, "must", ctx);
-                dispatchProc.command = ["/usr/bin/sh", "-c", dispatchProc.script];
-                dispatchProc.running = true;
-                return ;
-            }
             root.runCliamp(root.pendingSubRow, action, {
                 "op": "url.load",
                 "params": {

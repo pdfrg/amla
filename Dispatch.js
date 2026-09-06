@@ -82,6 +82,8 @@ function mustResolver(row) {
         return "year:" + row.decade + "-" + (row.decade + 9)
     case "subsonic-decade":
         return "subsonic:year:" + row.decade + "-" + (row.decade + 9)
+    case "subsonic-playlist":
+        return "subsonic:playlist:" + shq(row.id || "")
     default:
         return ""
     }
@@ -115,11 +117,15 @@ function build(action, row, target, ctx) {
             // resolver (saved name) or the synthesized m3u (toml source)
             // instead of a free-text query, which would FTS-miss.
             var psArgs = "playshuffle " + shq(psq)
-            if (row && (row.kind === "playlist" || row.kind === "subsonic-playlist")) {
+            if (row && row.kind === "playlist") {
                 if (ctx.resolvedM3u)
                     psArgs = "playshuffle " + shq(ctx.resolvedM3u)
-                else if (row.kind === "playlist" && row.source !== "cliamp")
+                else if (row.source !== "cliamp")
                     psArgs = "playshuffle " + shq("playlist:" + String(row.title).replace(/\.(m3u8?|M3U8?)$/, ""))
+            } else if (row && row.kind === "subsonic-playlist") {
+                var subPs = mustResolver(row)
+                if (subPs.length > 0)
+                    psArgs = "playshuffle " + subPs
             }
             return bin + "\nif " + mustRunningExpr() + "; then\n  \"$BIN\" " + psArgs +
                 "\nelse\n  " + launchVerb(psArgs) + "\nfi"
@@ -127,7 +133,7 @@ function build(action, row, target, ctx) {
         var res = mustResolver(row)
         // toml playlists reach must as a synthesized m3u (must cannot
         // read cliamp's format); the QML side resolves it first.
-        if (row && (row.kind === "playlist" || row.kind === "subsonic-playlist") && ctx.resolvedM3u)
+        if (row && row.kind === "playlist" && ctx.resolvedM3u)
             res = shq(ctx.resolvedM3u)
         if (res.length === 0)
             return "exit 1"
@@ -137,7 +143,7 @@ function build(action, row, target, ctx) {
             // (silent empty playlist). Files/dirs instead go as launch args
             // (loadCLIPaths + --play); prefixed resolvers keep the ctl verb.
             var launchArgs
-            if (ctx.resolvedM3u && (row.kind === "playlist" || row.kind === "subsonic-playlist"))
+            if (ctx.resolvedM3u && row.kind === "playlist")
                 launchArgs = shq(ctx.resolvedM3u) + " --play"
             else if ((row.kind === "song" || row.kind === "temp" || row.kind === "library") && row.path)
                 launchArgs = shq(row.path) + " --play"
