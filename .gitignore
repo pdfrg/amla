@@ -8,3 +8,4 @@ NOTES.md
 publishing-notes.md
 project-outline.txt
 scripts/install.sh
+__pycache__/
