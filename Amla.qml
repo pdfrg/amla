@@ -128,12 +128,14 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1960"
+    readonly property string buildId: "0.5.1970"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
     // native server-playlist resolver (must >= v0.2.4, or dev builds).
     property string mustVersion: ""
+    // MPD liveness (§18): -1 unknown (probe unanswered), 0 down, 1 up.
+    property int mpdAlive: -1
     // Session upgrade nudge: fired once when falling back on a
     // positively-old must (never for unknown versions, never twice).
     property bool mustNudged: false
@@ -184,6 +186,7 @@ Item {
         refreshRoots();
         refreshFacets();
         root.probeMustVersion();
+        root.probeMpd();
     }
 
     // IPC freshness probe: omarchy-shell shell call io.github.pdfrg.amla buildInfo ""
@@ -191,11 +194,31 @@ Item {
         return root.buildId;
     }
 
+    // Target badge: base name plus state suffixes (no-must simulation,
+    // MPD daemon down). mpdAlive -1 (probe unanswered) shows no suffix.
+    function targetBadgeText() {
+        var t = root.targetPlayer;
+        if (root.debugNoMust())
+            t += " · no-must";
+
+        if (t === "mpd" && root.mpdAlive === 0)
+            t += " · down";
+
+        return t;
+    }
+
     function toggleTargetPlayer() {
         if (!root.pluginConfigLoaded)
             return ;
 
-        root.targetPlayer = root.targetPlayer === "must" ? "cliamp" : "must";
+        // Three-way cycle (cliamp → must → mpd → cliamp): the cliamp→must
+        // first step preserves the old two-way muscle memory.
+        if (root.targetPlayer === "cliamp")
+            root.targetPlayer = "must";
+        else if (root.targetPlayer === "must")
+            root.targetPlayer = "mpd";
+        else
+            root.targetPlayer = "cliamp";
         // Dirty keys only (partial object): the merge overlays these
         // onto a fresh disk read, so stale in-memory values for the
         // other owned keys (mustBin, dirs) can never wipe real settings.
@@ -512,11 +535,29 @@ Item {
         mustVersionProc.running = true;
     }
 
+    // MPD liveness probe (§18): one fork per popup open, cached in
+    // mpdAlive. mpc reads MPD_HOST/MPD_PORT; empty plugin values fall
+    // back to mpc's own localhost:6600.
+    function probeMpd() {
+        if (mpdProbeProc.running)
+            return ;
+
+        mpdProbeProc.environment = {
+            "PATH": "/usr/bin:/bin",
+            "AMLA_MPDHOST": String((root.amlaPluginCfg && root.amlaPluginCfg.mpdHost) || ""),
+            "AMLA_MPDPORT": String((root.amlaPluginCfg && root.amlaPluginCfg.mpdPort) || "")
+        };
+        mpdProbeProc.command = ["/usr/bin/sh", "-c", "command -v mpc >/dev/null 2>&1 || exit 3; [ -n \"$AMLA_MPDHOST\" ] && export MPD_HOST=\"$AMLA_MPDHOST\"; [ -n \"$AMLA_MPDPORT\" ] && export MPD_PORT=\"$AMLA_MPDPORT\"; mpc status >/dev/null 2>&1"];
+        mpdProbeProc.running = true;
+    }
+
     function dispatch(row, action) {
         var target = root.targetPlayer;
         var ctx = {
             "mustBin": root.pluginMustBin,
-            "query": root.filterText
+            "query": root.filterText,
+            "mpdHost": (root.amlaPluginCfg && root.amlaPluginCfg.mpdHost) || "",
+            "mpdPort": (root.amlaPluginCfg && root.amlaPluginCfg.mpdPort) || 0
         };
         if (target === "cliamp" && String(action || "").indexOf("random-album") === 0) {
             // Combined mirrors must's server-side `random`: a uniform pick
@@ -1816,6 +1857,16 @@ Item {
 
     }
 
+    // MPD probe result: exit 0 (mpc reached the daemon) => up, anything
+    // else (no binary, connection refused) => down.
+    Process {
+        id: mpdProbeProc
+
+        onExited: function(exitCode) {
+            root.mpdAlive = exitCode === 0 ? 1 : 0;
+        }
+    }
+
     Process {
         id: subCliampTracksProc
 
@@ -2391,7 +2442,7 @@ Item {
                             // Debug affordance: the badge declares the
                             // must-less simulation ONLY when the debug flag is
                             // set. Genuine no-must installs read plain `cliamp`.
-                            text: root.debugNoMust() ? root.targetPlayer + " · no-must" : root.targetPlayer
+                            text: root.targetBadgeText()
                             color: Color.menu.selectedText
                             font.family: Style.font.family
                             font.pixelSize: Style.font.bodySmall

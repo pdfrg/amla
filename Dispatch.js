@@ -203,6 +203,19 @@ function build(action, row, target, ctx) {
             "\n  " + launchVerb("") + "\n  exit 1\nfi"
     }
 
+    // ----- mpd target (§18 roadmap) -----
+    // Phase 1: plumbing only (target selection, liveness probe, guards).
+    // Playback arrives next; until then the guards explain exactly why
+    // nothing played, and history never records (exit 1 throughout).
+    if (target === "mpd") {
+        var mpdHost = String(ctx.mpdHost || "localhost")
+        var mpdPort = String(ctx.mpdPort || "6600")
+        return "export MPD_HOST=" + shq(mpdHost) + " MPD_PORT=" + shq(mpdPort) + "\n  " +
+            "if ! command -v mpc >/dev/null 2>&1; then\n  " + notify("amla: mpc not found — install it (Arch: extra/mpc) for MPD playback") + "\n  exit 1\nfi\n" +
+            "if ! mpc status >/dev/null 2>&1; then\n  " + notify("amla: MPD not reachable at " + mpdHost + ":" + mpdPort + " — start it (systemctl --user start mpd)") + "\n  exit 1\nfi\n" +
+            notify("amla: MPD playback lands in the next build — target remembered") + "\n  exit 1"
+    }
+
     // ----- cliamp target (v2 IPC) -----
     // Requires cliamp v2+ (`remote call` IPC). Older v1 binaries lack the
     // `remote` subcommand, so probe for it up front and notify instead of

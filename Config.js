@@ -161,13 +161,15 @@ function pickSubsonic(mustSub, cliampSub) {
 
 // amla plugin config (~/.config/amla/config.json).
 // musicDirs/tempDirs override auto-detection when non-empty; bucketWords
-// and noiseTokens extend the path-parser defaults (§14); mpd is reserved
-// for the roadmap (§18) — parsed but unused.
+// and noiseTokens extend the path-parser defaults (§14); mpdHost/mpdPort
+// select a non-default daemon (§18).
 function parsePluginConfig(text) {
   var obj = {}
   try { obj = JSON.parse(String(text || "{}")) } catch (e) { obj = {} }
   return {
-    targetPlayer: obj.targetPlayer === "must" ? "must" : "cliamp",
+    // Three-way target (§18): must / mpd pass through, anything else
+    // (including legacy values) falls back to cliamp, the default.
+    targetPlayer: obj.targetPlayer === "must" || obj.targetPlayer === "mpd" ? obj.targetPlayer : "cliamp",
     mustBin: obj.mustBin === undefined ? "" : String(obj.mustBin),
     musicDirs: Array.isArray(obj.musicDirs) ? obj.musicDirs.map(function (x) { return String(x) }) : [],
     tempDirs: Array.isArray(obj.tempDirs) ? obj.tempDirs.map(function (x) { return String(x) }) : [],
