@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2010"
+    readonly property string buildId: "0.5.2020"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -805,16 +805,38 @@ Item {
             }
             return ;
         }
+        // MPD random-album actions carry no row (playRandom): route
+        // before the row-gated branch, mirroring the cliamp shape.
+        if (target === "mpd" && String(action || "").indexOf("random-album") === 0) {
+            root.dispatchMpdRandom(action);
+            return ;
+        }
         if (target === "mpd" && row) {
-            // Local matrix (§18 phase 2): exact catalog paths queue by
-            // MPD-relative URI. Subsonic rows wait for phase 3 (stream
-            // URLs + metadata preload).
+            // Server rows (§18 phase 3): tagged stream URLs over pure
+            // REST (no cliamp-daemon dependency).
             if (String(row.kind || "").indexOf("subsonic-") === 0) {
-                root.notify("amla: subsonic via MPD arrives next — local library plays today");
-                return ;
-            }
-            if (String(action || "").indexOf("random-album") === 0) {
-                root.dispatchMpdRandom(action);
+                if (!root.subEnabled) {
+                    root.notify("amla: no subsonic server configured — add must [subsonic], cliamp [navidrome], or amla subsonicUrl/User/Pass");
+                    return ;
+                }
+                if (row.kind === "subsonic-song" && row.id) {
+                    // Direct: one stream URL + split tags, no REST hop.
+                    root.pendingSubAction = action;
+                    root.pendingSubRow = row;
+                    root.pendingSubTarget = "";
+                    root.runMpd(row, action, root.subTracksToMpd([{
+                        "id": row.id,
+                        "artist": row.artist || "",
+                        "album": row.album || "",
+                        "title": row.titleField || row.title,
+                        "duration": row.duration || 0
+                    }]));
+                    return ;
+                }
+                root.pendingSubAction = action;
+                root.pendingSubRow = row;
+                root.pendingSubTarget = "mpd";
+                root.dispatchSubsonicMpd(row, action);
                 return ;
             }
             if (row.kind === "song") {
@@ -900,27 +922,36 @@ Item {
         return String(body || "").replace("#EXTM3U\n", "#EXTM3U\n# serial " + Date.now() + "\n");
     }
 
-    // MPD dispatch (§18 phase 2): absolute catalog paths → staged queue
-    // JSON (FileView write, never a giant env var) → helper run. Empty
-    // material notifies here so history never records a no-op.
-    function runMpd(row, action, absPaths) {
-        var paths = [];
-        for (var i = 0; i < (absPaths || []).length; i++) {
-            var p = String(absPaths[i] || "").trim();
-            if (p.length > 0 && p.charAt(0) === "/")
-                paths.push(p);
+    // MPD dispatch (§18 phase 2): catalog paths or prebuilt {uri, tags}
+    // entries → staged queue JSON (FileView write, never a giant env
+    // var) → helper run. Stream URLs pass through untouched; absolute
+    // paths strip to music-relative in the helper. Empty material
+    // notifies here so history never records a no-op.
+    function runMpd(row, action, items) {
+        var tracks = [];
+        for (var i = 0; i < (items || []).length; i++) {
+            var it = items[i];
+            var u = String((it && typeof it === "object" ? it.uri : it) || "").trim();
+            if (u.length === 0)
+                continue;
 
+            if (u.charAt(0) !== "/" && u.indexOf("://") < 0)
+                continue;
+
+            var e = {
+                "uri": u
+            };
+            if (it && typeof it === "object" && it.tags)
+                e.tags = it.tags;
+
+            tracks.push(e);
         }
-        if (paths.length === 0) {
-            root.notify("amla: nothing playable for '" + (row.title || action) + "' (MPD)");
+        if (tracks.length === 0) {
+            root.notify("amla: nothing playable for '" + ((row && row.title) || action) + "' (MPD)");
             return ;
         }
         root.pendingMpdRow = row;
         root.pendingMpdAction = action;
-        var tracks = [];
-        for (var j = 0; j < paths.length; j++) tracks.push({
-            "uri": paths[j]
-        })
         mpdQueueFile.setText(JSON.stringify({
             "tracks": tracks,
             "insertNext": action === "enqueue-next",
@@ -955,10 +986,25 @@ Item {
             root.cancel();
             return ;
         }
-        if (scope !== "local") {
-            root.notify("amla: random " + scope + " via MPD arrives with subsonic (phase 3)");
+        if (scope === "subsonic") {
+            // Server pick: getAlbumList2 random=1, then the MPD album
+            // flow (mirrors the cliamp combined-random shape).
+            if (!root.subEnabled) {
+                root.notify("amla: no subsonic server configured — add must [subsonic], cliamp [navidrome], or amla subsonicUrl/User/Pass");
+                return ;
+            }
+            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+            root.pendingSubAction = "play";
+            root.pendingSubRow = null;
+            root.pendingSubTarget = "mpd";
+            subRandomProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+            subRandomProc.running = true;
+            root.cancel();
             return ;
         }
+        if (scope !== "local")
+            return ;
+
         root.pendingMpdRandom = true;
         randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.localDbPath() + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM " + root.localDbTable() + " WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
         randomAlbumProc.running = true;
@@ -1036,7 +1082,87 @@ Item {
         return a;
     }
 
+    // REST track objects → MPD queue entries: one fresh auth salt per
+    // dispatch (shared across its tracks, like the m3u flows), stream
+    // URL per id, split metadata tags (stream URLs carry none — the
+    // preload half of the old gompd addtagid trick, default-on §18).
+    function subTracksToMpd(tracks) {
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        var out = [];
+        for (var i = 0; i < (tracks || []).length; i++) {
+            var t = tracks[i] || {
+            };
+            if (!t.id)
+                continue;
+
+            out.push({
+                "uri": Subsonic.streamUrl(root.sub.url, auth, t.id),
+                "tags": {
+                    "artist": t.artist || "",
+                    "album": t.album || "",
+                    "title": t.title || "",
+                    "track": t.track || "",
+                    "date": t.year || ""
+                }
+            });
+        }
+        return out;
+    }
+
+    // MPD twin of runSubM3u: true when the fetch was armed for MPD
+    // (pendingSubTarget), dispatching tagged stream URLs through runMpd
+    // (the daemon shuffles playshuffle server-side — no pre-shuffle).
+    // Clears the target flag; false lets the caller continue cliamp.
+    function runSubMpd(tracks, fallbackAction) {
+        if (root.pendingSubTarget !== "mpd")
+            return false;
+
+        root.pendingSubTarget = "";
+        // Stale-flag guard: a failed fetch leaves the flag set while the
+        // user moves on — never hijack another target's completion.
+        if (root.targetPlayer !== "mpd")
+            return false;
+
+        var action = root.pendingSubAction || fallbackAction;
+        root.runMpd(root.pendingSubRow, action, root.subTracksToMpd(tracks));
+        return true;
+    }
+
+    // MPD twin of dispatchSubsonicCliamp: same REST endpoints through
+    // the shared procs; completions route via pendingSubTarget to
+    // tagged stream URLs. No cliamp-daemon dependency, no provider ops.
+    function dispatchSubsonicMpd(row, action) {
+        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        if (row.kind === "subsonic-album" && row.id && String(row.id).length > 0) {
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, row.id)];
+            subFallbackProc.running = true;
+        } else if (row.kind === "subsonic-artist") {
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100)];
+            subFallbackProc.running = true;
+        } else if (row.kind === "subsonic-genre") {
+            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
+            subGenreProc.running = true;
+        } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
+            var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
+            var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
+            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
+            subYearListProc.running = true;
+        } else if (row.kind === "subsonic-playlist" && row.id) {
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
+            subPlaylistProc.running = true;
+        } else {
+            // Id-less album row (e.g. from history): REST search over
+            // "artist album", mirroring subProviderFallback.
+            var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, q, 100)];
+            subFallbackProc.running = true;
+        }
+    }
+
     function runSubM3u(tracks, fallbackAction) {
+        if (root.runSubMpd(tracks, fallbackAction))
+            return ;
+
         var action = root.pendingSubAction || fallbackAction;
         var list = action === "playshuffle" ? root.shuffledCopy(tracks) : tracks;
         var m = root.subTracksToM3u(list);
@@ -1811,6 +1937,14 @@ Item {
                     // Combined pick hit an unreachable server: degrade to
                     // local (mirrors must trying the next source). Scoped
                     // subsonic requests stay silent — nothing else applies.
+                    // An MPD-scoped pick degrades to a local MPD pick.
+                    if (root.pendingSubTarget === "mpd") {
+                        // MPD-scoped pick, server unreachable: degrade to
+                        // a local MPD pick via the shared firing below.
+                        root.pendingSubTarget = "";
+                        root.pendingMpdRandom = true;
+                        root.randomFallbackLocal = true;
+                    }
                     if (root.randomFallbackLocal) {
                         root.randomFallbackLocal = false;
                         randomAlbumProc.command = ["/usr/bin/sh", "-c", "/usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -json -readonly '" + root.localDbPath() + "' \"SELECT album, COALESCE(NULLIF(album_artist,''), artist) AS a FROM " + root.localDbTable() + " WHERE album != '' GROUP BY album, a ORDER BY RANDOM() LIMIT 1\""];
@@ -1826,6 +1960,13 @@ Item {
                     "artist": alb.artist || "",
                     "title": alb.name || ""
                 };
+                // MPD-scoped random: the REST album flow, not cliamp's.
+                if (root.pendingSubTarget === "mpd") {
+                    root.pendingSubAction = "play";
+                    root.pendingSubRow = pseudoRow;
+                    root.dispatchSubsonicMpd(pseudoRow, "play");
+                    return ;
+                }
                 root.dispatchSubsonicCliamp(pseudoRow, "play");
             }
         }
@@ -1913,6 +2054,11 @@ Item {
                 if (root.yearTracks.length === 0)
                     return ;
 
+                // MPD target: tagged stream URLs straight through runMpd
+                // (its own staging carries the dedup serial) — no m3u.
+                if (root.runSubMpd(root.yearTracks, "enqueue"))
+                    return ;
+
                 // FileView write (not a shell printf): a ~190 KB command
                 // string never completes under quickshell Process, while
                 // setText has no such ceiling. Playshuffle pre-shuffles
@@ -1974,6 +2120,11 @@ Item {
                     root.notify("amla: playlist '" + (root.pendingSubRow ? root.pendingSubRow.title : "") + "' has no playable entries");
                     return ;
                 }
+                // MPD target: tagged stream URLs, no pre-shuffle (the
+                // daemon shuffles server-side).
+                if (root.runSubMpd(entries, "enqueue"))
+                    return ;
+
                 var list = root.pendingSubAction === "playshuffle" ? root.shuffledCopy(entries) : entries;
                 subPlaylistFile.setText(root.stampM3u(root.subTracksToM3u(list).body));
             }
