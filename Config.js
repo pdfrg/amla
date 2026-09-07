@@ -147,16 +147,36 @@ function cliampSubsonic(text) {
   }
 }
 
-// Subsonic credential precedence: must's [subsonic] wins when enabled
-// with a URL (existing behavior), else cliamp's [navidrome] — present on
-// every omarchy install, so subsonic works with zero must. Both absent →
-// the must shape (disabled), preserving today's no-server behavior.
-function pickSubsonic(mustSub, cliampSub) {
+// Subsonic credential precedence (§18): must's [subsonic] wins when
+// enabled with a URL (existing behavior), else cliamp's [navidrome] —
+// present on every omarchy install, so subsonic works with zero must —
+// else amla's own config.json keys (the MPD-only machine has neither
+// must nor cliamp to borrow from). All absent → the must shape
+// (disabled), preserving today's no-server behavior.
+function pickSubsonic(mustSub, cliampSub, amlaSub) {
   if (mustSub && mustSub.enabled && String(mustSub.url || "").length > 0)
     return mustSub
   if (cliampSub && String(cliampSub.url || "").length > 0)
     return cliampSub
+  if (amlaSub && String(amlaSub.url || "").length > 0)
+    return amlaSub
   return mustSub
+}
+
+// amla-owned server creds (config.json subsonicUrl/User/Pass): last-
+// resort source for machines with no must/cliamp config. Raw values —
+// the QML side expands ${VAR} secrets, mirroring the cliamp handling.
+function amlaSubsonic(pluginCfg) {
+  var pc = pluginCfg || {}
+  var url = String(pc.subsonicUrl || "").replace(/\/+$/, "")
+  return {
+    enabled: url.length > 0,
+    url: url,
+    username: String(pc.subsonicUser || ""),
+    password: String(pc.subsonicPass || ""),
+    serverName: "Subsonic",
+    serverBadge: "S"
+  }
 }
 
 // amla plugin config (~/.config/amla/config.json).
@@ -177,6 +197,9 @@ function parsePluginConfig(text) {
     noiseTokens: Array.isArray(obj.noiseTokens) ? obj.noiseTokens.map(function (x) { return String(x) }) : [],
     mpdHost: obj.mpdHost === undefined ? "" : String(obj.mpdHost),
     mpdPort: obj.mpdPort === undefined ? 0 : (parseInt(obj.mpdPort, 10) || 0),
+    subsonicUrl: obj.subsonicUrl === undefined ? "" : String(obj.subsonicUrl),
+    subsonicUser: obj.subsonicUser === undefined ? "" : String(obj.subsonicUser),
+    subsonicPass: obj.subsonicPass === undefined ? "" : String(obj.subsonicPass),
     debugNoMust: obj.debugNoMust === true
   }
 }
@@ -191,6 +214,9 @@ function serializePluginConfig(cfg) {
     noiseTokens: cfg.noiseTokens || [],
     mpdHost: cfg.mpdHost || "",
     mpdPort: cfg.mpdPort || 0,
+    subsonicUrl: cfg.subsonicUrl || "",
+    subsonicUser: cfg.subsonicUser || "",
+    subsonicPass: cfg.subsonicPass || "",
     debugNoMust: cfg.debugNoMust === true
   }, null, 2) + "\n"
 }

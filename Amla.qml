@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2000"
+    readonly property string buildId: "0.5.2010"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -543,6 +543,21 @@ Item {
     // MPD liveness probe (§18): one fork per popup open, cached in
     // mpdAlive. mpc reads MPD_HOST/MPD_PORT; empty plugin values fall
     // back to mpc's own localhost:6600.
+    // Effective subsonic creds (§18): must > cliamp > amla-owned.
+    // Recomputed in all three config loaders (any order). ${VAR}
+    // expansion for amla-owned secrets mirrors the cliamp handling.
+    function refreshSub() {
+        var owned = Config.amlaSubsonic(root.amlaPluginCfg);
+        for (var k in owned) {
+            if (typeof owned[k] === "string")
+                owned[k] = owned[k].replace(/\$\{([^}]+)\}/g, function(m, name) {
+                return Quickshell.env(name) || m;
+            });
+
+        }
+        root.sub = Config.pickSubsonic(root.mustConfig.subsonic, root.cliampNav, owned);
+    }
+
     function probeMpd() {
         if (mpdProbeProc.running)
             return ;
@@ -2446,7 +2461,7 @@ Item {
 
             }
             root.cliampNav = nav;
-            root.sub = Config.pickSubsonic(root.mustConfig.subsonic, nav);
+            root.refreshSub();
             refreshRoots();
         }
     }
@@ -2459,7 +2474,7 @@ Item {
         printErrors: false
         onLoaded: {
             root.mustConfig = Config.mustConfig(text(), root.home);
-            root.sub = Config.pickSubsonic(root.mustConfig.subsonic, root.cliampNav);
+            root.refreshSub();
             refreshRoots();
             // History may have loaded first while subEnabled was still
             // false — retry the server backfill now that creds exist.
@@ -2492,6 +2507,7 @@ Item {
             root.targetPlayer = pc.targetPlayer;
             root.pluginMustBin = pc.mustBin || "";
             root.pluginConfigLoaded = true;
+            root.refreshSub();
             if (pc.debugNoMust)
                 root.mustDbOk = false;
 
