@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2040"
+    readonly property string buildId: "0.5.2050"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
