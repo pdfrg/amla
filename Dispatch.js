@@ -216,11 +216,15 @@ function build(action, row, target, ctx) {
         var mpdHelper = String(ctx.helper || "")
         var mpdQf = String(ctx.queueFile || "")
         var mpdRoots = ctx.stripPrefixes || []
+        // Playshuffle mirrors cliamp/must: the queue stays in resolved
+        // (album/track) order and the daemon advances randomly — NOT a
+        // shuffled queue (MPD's shuffle would also pin nothing useful
+        // and hide the order users expect to see).
         var mpdFlags = ""
         if (action === "play")
             mpdFlags = " --clear --random off --play"
         else if (action === "playshuffle")
-            mpdFlags = " --clear --shuffle --play"
+            mpdFlags = " --clear --random on --play"
         var mpdStrip = ""
         for (var mpi = 0; mpi < mpdRoots.length; mpi++) {
             if (String(mpdRoots[mpi]).length > 0)

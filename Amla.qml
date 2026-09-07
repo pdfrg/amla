@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2020"
+    readonly property string buildId: "0.5.2030"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -1109,9 +1109,33 @@ Item {
         return out;
     }
 
+    // Album/track ordering for server material: search endpoints return
+    // relevance order (albums mixed up), so artist/genre/album/search
+    // results sort client-side like the old cache-DB flows did. Server-
+    // ordered kinds (playlists, year/decade batches) keep their order.
+    function sortSubTracks(tracks) {
+        var a = (tracks || []).slice();
+        var num = function num(t) {
+            return parseInt(t && t.track, 10) || 0;
+        };
+        a.sort(function(x, y) {
+            var ax = String((x && x.album) || ""), ay = String((y && y.album) || "");
+            if (ax !== ay)
+                return ax < ay ? -1 : 1;
+
+            var nx = num(x), ny = num(y);
+            if (nx !== ny)
+                return nx - ny;
+
+            var tx = String((x && x.title) || ""), ty = String((y && y.title) || "");
+            return tx < ty ? -1 : (tx > ty ? 1 : 0);
+        });
+        return a;
+    }
+
     // MPD twin of runSubM3u: true when the fetch was armed for MPD
     // (pendingSubTarget), dispatching tagged stream URLs through runMpd
-    // (the daemon shuffles playshuffle server-side — no pre-shuffle).
+    // (playshuffle rides random mode on an ordered queue — no shuffle).
     // Clears the target flag; false lets the caller continue cliamp.
     function runSubMpd(tracks, fallbackAction) {
         if (root.pendingSubTarget !== "mpd")
@@ -1124,7 +1148,9 @@ Item {
             return false;
 
         var action = root.pendingSubAction || fallbackAction;
-        root.runMpd(root.pendingSubRow, action, root.subTracksToMpd(tracks));
+        var kind = root.pendingSubRow && root.pendingSubRow.kind;
+        var list = (kind === "subsonic-playlist" || kind === "subsonic-year" || kind === "subsonic-decade") ? tracks : root.sortSubTracks(tracks);
+        root.runMpd(root.pendingSubRow, action, root.subTracksToMpd(list));
         return true;
     }
 
