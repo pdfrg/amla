@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.1990"
+    readonly property string buildId: "0.5.2000"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -876,6 +876,15 @@ Item {
         return u;
     }
 
+    // Staged-dispatch dedup guard: FileView.setText with byte-identical
+    // content skips onSaved, silently dropping re-dispatches (same album
+    // re-added, same playshuffle material — only script flags differ).
+    // A serial comment keeps every staging unique; "#" lines are m3u
+    // comments, ignored by all parsers.
+    function stampM3u(body) {
+        return String(body || "").replace("#EXTM3U\n", "#EXTM3U\n# serial " + Date.now() + "\n");
+    }
+
     // MPD dispatch (§18 phase 2): absolute catalog paths → staged queue
     // JSON (FileView write, never a giant env var) → helper run. Empty
     // material notifies here so history never records a no-op.
@@ -899,7 +908,8 @@ Item {
         })
         mpdQueueFile.setText(JSON.stringify({
             "tracks": tracks,
-            "insertNext": action === "enqueue-next"
+            "insertNext": action === "enqueue-next",
+            "serial": Date.now()
         }));
     }
 
@@ -1897,7 +1907,7 @@ Item {
                 if (m.firstUrl.length === 0)
                     return ;
 
-                yearM3uFile.setText(m.body);
+                yearM3uFile.setText(root.stampM3u(m.body));
             }
         }
 
@@ -1950,7 +1960,7 @@ Item {
                     return ;
                 }
                 var list = root.pendingSubAction === "playshuffle" ? root.shuffledCopy(entries) : entries;
-                subPlaylistFile.setText(root.subTracksToM3u(list).body);
+                subPlaylistFile.setText(root.stampM3u(root.subTracksToM3u(list).body));
             }
         }
 
