@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2030"
+    readonly property string buildId: "0.5.2040"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -2069,7 +2069,9 @@ Item {
                             "artist": s.artist || "",
                             "album": s.album || "",
                             "title": s.title || "",
-                            "duration": s.duration || 0
+                            "duration": s.duration || 0,
+                            "track": s.track || "",
+                            "year": s.year || ""
                         });
                     }
                 }
