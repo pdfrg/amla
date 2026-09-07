@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "pdfrg",
   "license": "MIT",
-  "description": "Searchable music launcher popup: must / cliamp catalog with favorites, thumbnails, and play actions",
+  "description": "Searchable music launcher popup: must / cliamp / MPD catalog with favorites, thumbnails, and play actions",
   "kinds": ["menu"],
   "entryPoints": {
     "menu": "Amla.qml"

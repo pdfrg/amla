@@ -7,11 +7,11 @@ Searchable music launcher plugin for Omarchy 4 (Quattro): `SUPER + M` opens a po
 over your catalog — local library, temp/download albums, and Subsonic
 (Navidrome): artists, albums, songs, genres, years/decades, playlists.
 Favorites learn from your play history and surface as you type. Dispatches to
-**cliamp** (default) or **must** (see below). Pure QML plugin, MIT licensed.
+**cliamp** (default), **must**, or **MPD** (see below). Pure QML plugin, MIT licensed.
 
 ![amla launcher popup](preview.jpg)
 
-## Players: cliamp or must (either one, or try both)
+## Players: cliamp, must, or MPD (any, some, or all)
 
 - **cliamp** ships with Omarchy and works out of the box — amla targets it by
   default (requires cliamp v2+ for the `url.load` / `track.*` / `queue.*` IPC
@@ -22,12 +22,24 @@ Favorites learn from your play history and surface as you type. Dispatches to
   (in the terminal), artist bios, and vim-style keybindings. It needs a Go toolchain
   to build, but amla's must support runs deepest — native catalog resolvers,
   playshuffle, scoped random, rescan — because the two were developed
-  together. Set it as your target with `Ctrl+T` inside the popup.
+  together. Cycle to it with `Ctrl+T` inside the popup.
 
 ![amla+must](amla-must.jpg)
 
-A Subsonic/Navidrome server is optional — configure it in must and amla
-searches it too; without it amla is local-only and never touches the network.
+- **MPD** (via `mpc` + the user-service daemon) takes the same catalog:
+  play, enqueue, play-next, playshuffle, random albums, playlists — local
+  files queue by path, Subsonic items as tagged stream URLs with preloaded
+  Artist/Album/Title/Track/Date (stream durations can't be set through the
+  MPD protocol, and server items show no artwork in MPD clients — both are
+  daemon limitations, not amla gaps). Playshuffle keeps the queue in
+  album/track order and switches the daemon to random mode, like the other
+  targets. No TUI to launch: an unreachable daemon notifies instead.
+
+A Subsonic/Navidrome server is optional — configure it in must
+(`[subsonic]`), cliamp (`[navidrome]`), or amla's own config
+(`subsonicUrl`/`subsonicUser`/`subsonicPass` as last resort) and amla
+searches it too; without any of those amla is local-only and never touches
+the network.
 
 ## Local library: three tiers, zero config
 
@@ -97,8 +109,9 @@ player-independent way is amla's own config (`~/.config/amla/config.json`):
 ```
 
 then `omarchy restart shell` (hand-edits need a restart — see above). The
-same file takes `mustBin`, `bucketWords`, `noiseTokens`, `mpdHost`/`mpdPort`
-overrides; `Ctrl+T` in the popup flips `targetPlayer` for you.
+same file takes `mustBin`, `bucketWords`, `noiseTokens`, `mpdHost`/`mpdPort`,
+and `subsonicUrl`/`subsonicUser`/`subsonicPass` overrides; `Ctrl+T` in the
+popup cycles `targetPlayer` (cliamp → must → mpd) for you.
 
 Path-parser extras (`bucketWords` / `noiseTokens`): the file indexer must
 decide which directory levels are artist/album and which are just
@@ -167,7 +180,7 @@ server_badge = 'N'
 | `Alt+R` | play random album (local · temp · subsonic) |
 | `Alt+1` / `Alt+2` / `Alt+3` | play random local / subsonic / temp album |
 | `Ctrl+R` | rescan + refresh facets + flush art cache |
-| `Ctrl+T` | toggle target player (persists) |
+| `Ctrl+T` | cycle target player cliamp → must → mpd (persists) |
 | `Esc` | clear query / close |
 
 ## Data & state
@@ -185,11 +198,6 @@ server_badge = 'N'
 
 Capabilities, network use, and trust boundaries are disclosed in
 [`SECURITY.md`](SECURITY.md).
-
-## Roadmap
-
-- **MPD support** (play/enqueue via `mpc`, Subsonic items through generated
-  stream-URL m3us with `#EXTINF` titles — no bridge daemon needed)
 
 ## Removal
 

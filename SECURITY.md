@@ -18,6 +18,8 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | `/usr/bin/sh -c` | glue for multi-step flows (listing temp dirs/playlists, art probing, dispatch scripts) | every interpolated value single-quote wrapped (`shq`) or SQL-quote doubled |
 | must binary (config `mustBin`, else `command -v must`) | `play / playshuffle / enqueue / enqueue-next / random / rescan / status` | resolvers built from the selected row; see `Dispatch.js` |
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
+| `/usr/bin/mpc` | MPD reachability probe (`status` only — queueing goes through the helper below, since `mpc` over TCP cannot touch local files) | host/port from plugin config, else its own `localhost:6600` default |
+| `/usr/bin/python3 <plugindir>/mpd_queue.py` | MPD queue updates over one TCP connection (`clear`, `addid` + position, `addtagid`, `random`, `shuffle`, `play`) | staged `$XDG_RUNTIME_DIR/amla/mpd_queue.json` (argv: host/port/queue-file/strip-prefixes/flags); absolute paths strip to music-relative via longest configured music-root prefix, stream URLs pass through |
 | `/usr/share/omarchy/bin/omarchy-launch-tui` | launch must/cliamp TUI when the player isn't running (play actions only) | fixed verbs + quoted resolver |
 | `/usr/bin/notify-send` | fallback notices (e.g. "must not running — started it") | static strings only |
 | `/usr/bin/python3 <plugindir>/index-library.py` | background tag scan over the music roots into amla's own `files.db` (mutagen → ffprobe → filename ladder, one run at a time, incremental; no timeout — a cold scan of a huge library runs minutes) | roots passed as argv (visible to same-user `ps`, same residual as below); tags parsed from file bytes, never executed |
@@ -32,8 +34,10 @@ them read-only and never installs anything.
 
 ## Network
 
-- Only to the Subsonic server configured in `~/.config/must/config.toml`
-  (`[subsonic]` url/user/password), and only when `enabled` is set there.
+- Only to the Subsonic server resolved must `[subsonic]` → cliamp
+  `[navidrome]` → amla's own `subsonicUrl/User/Pass` (first URL wins;
+  must additionally requires `enabled`), and only for Subsonic rows,
+  facets, and artwork.
 - Auth is Subsonic token auth: `md5(password + per-request salt)` sent as the
   `t=` query param. The password itself never leaves the machine in any form
   except this standard Subsonic hash.
@@ -43,8 +47,10 @@ them read-only and never installs anything.
 
 - `~/.config/amla/config.json` — own config (`targetPlayer`, `mustBin`,
   `musicDirs`, `tempDirs`, `bucketWords`, `noiseTokens`, `mpdHost/Port`,
-  `debugNoMust`). Re-read at shell start (external edits need a restart).
-- `~/.config/cliamp/config.toml` — `initial_directory` only, as a music-root hint.
+  `subsonicUrl/User/Pass`, `debugNoMust`). Re-read at shell start
+  (external edits need a restart).
+- `~/.config/cliamp/config.toml` — `initial_directory` (music-root hint)
+  and `[navidrome]` credentials (URL counts as enabled; `${VAR}` expanded).
 - `~/.config/must/config.toml` — `music_dirs`, `temp_dirs`, `[subsonic]`
   credentials (re-read on each popup open).
 - `~/.cache/must/library.db` — read-only (`-readonly` flag).
@@ -59,6 +65,9 @@ them read-only and never installs anything.
 - `~/.cache/amla/art/` — Subsonic cover thumbnails (`size=96`, `Ctrl+R` flushes).
 - `~/.cache/amla/files.db*` — amla-owned file index (songs + FTS5, WAL mode).
 - `$XDG_RUNTIME_DIR/amla/queue.m3u` — staging file for multi-track cliamp dispatch.
+- `$XDG_RUNTIME_DIR/amla/mpd_queue.json` — staging file for MPD dispatch
+  (track URIs + tags + per-dispatch serial).
+- `$XDG_RUNTIME_DIR/amla/subpl.m3u` — staging file for server-playlist dispatch.
 - Nothing under `/usr`, `/etc`, `~/.config/hypr/`, or `~/.config/omarchy/` is
   written by the plugin. (The optional `SUPER+M` keybinding below is a manual
   one-line user edit, not plugin code.)
