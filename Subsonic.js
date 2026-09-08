@@ -102,7 +102,10 @@ function songsSearchUrl(baseUrl, auth, query, count) {
 // Single-line m3u display title. Newlines stripped (one track per
 // line or the file corrupts); album included — m3u has no split
 // fields, so "Artist - Title" could never show where it came from.
-function m3uTitle(artist, album, title) {
+// Track number (when known) sits between album and title, zero-padded
+// to two digits — album order reads 01, 02, ... while a pre-shuffled
+// queue reads out of order. Omitted when absent/zero.
+function m3uTitle(artist, album, title, track) {
     var clean = function (s) {
         return String(s || "").replace(/[\r\n]+/g, " ").trim()
     }
@@ -111,6 +114,9 @@ function m3uTitle(artist, album, title) {
         parts.push(clean(artist))
     if (clean(album))
         parts.push(clean(album))
+    var n = parseInt(String(track == null ? "" : track).split("/")[0], 10)
+    if (n > 0)
+        parts.push((n < 10 ? "0" : "") + n)
     parts.push(clean(title))
     return parts.join(" - ")
 }

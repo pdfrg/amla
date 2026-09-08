@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2150"
+    readonly property string buildId: "0.5.2151"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -685,7 +685,8 @@ Item {
                         "artist": row.artist || "",
                         "album": row.album || "",
                         "title": row.titleField || row.title,
-                        "duration": row.duration || 0
+                        "duration": row.duration || 0,
+                        "track": row.track || ""
                     }]);
                     runCliamp(row, action, {
                         "op": "track.play",
@@ -710,7 +711,7 @@ Item {
                     // append goes as a single-entry m3u with a real
                     // EXTINF duration (not -1, which flags realtime).
                     var eauth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                    var ettl = Subsonic.m3uTitle(row.artist, row.album, row.titleField || row.title);
+                    var ettl = Subsonic.m3uTitle(row.artist, row.album, row.titleField || row.title, row.track);
                     var eu = Subsonic.streamUrl(root.sub.url, eauth, row.id);
                     var em3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                     runCliamp(row, action, {
@@ -1076,10 +1077,11 @@ Item {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
             var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
             urls.push(u);
-            // EXTINF carries Artist - Album - Title: m3u has no split
-            // fields (cliamp takes the whole string as Title), and the
-            // real duration (never -1: duration-less URLs flag realtime).
-            var ttl = Subsonic.m3uTitle(t.artist, t.album, t.title);
+            // EXTINF carries Artist - Album - 03 - Title: m3u has no
+            // split fields (cliamp takes the whole string as Title),
+            // and the real duration (never -1: duration-less URLs flag
+            // realtime). The track number shows album order vs shuffle.
+            var ttl = Subsonic.m3uTitle(t.artist, t.album, t.title, t.track || t.track_number);
             var dur = t.duration || t.durationSecs || 0;
             body += "#EXTINF:" + dur + "," + ttl + "\n" + u + "\n";
         }
@@ -1244,7 +1246,8 @@ Item {
     // env expansion); mode file cats a must m3u verbatim. Local files go
     // as bare paths (cliamp tag-probes them: full metadata + album
     // grouping, which a wholesale EXTINF title would destroy); http
-    // entries keep EXTINF duration/title (untaggable streams — a bare
+    // entries keep EXTINF duration/title (Artist - Album - 03 - Title;
+    // untaggable streams — a bare
     // URL renders as the bare host). Completion routes must-target to
     // Dispatch via ctx.resolvedM3u, cliamp-target to url.load + m3u —
     // pre-shuffled for playshuffle (cliamp pins the loaded head at 0).
@@ -1266,7 +1269,7 @@ Item {
             "AMLA_XDG_CONFIG_HOME": Quickshell.env("XDG_CONFIG_HOME") || "",
             "AMLA_CLIAMP_CONFIG_DIR": Quickshell.env("CLIAMP_CONFIG_DIR") || ""
         };
-        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\" | /usr/bin/tee \"$R/pl.m3u\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(if (.artist // \"\") != \"\" then \"\\(.artist) - \\(.title)\" else (.title // .path) end)\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\" | /usr/bin/tee \"$R/pl.m3u\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(([.artist // \"\", .album // \"\", ((.track_number // 0) | tostring | select(test(\"^[1-9][0-9]*$\")) | if length == 1 then \"0\" + . else . end), (.title // .path)] | map(select(. != \"\")) | join(\" - \")))\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
         playlistResolveProc.running = true;
     }
 
@@ -2329,7 +2332,7 @@ Item {
                 var action = root.pendingSubAction || "enqueue";
                 var ordered = action === "playshuffle" ? root.shuffledCopy(tracks) : tracks;
                 var body = "#EXTM3U\n";
-                for (var j = 0; j < ordered.length; j++) body += "#EXTINF:" + (ordered[j].duration || ordered[j].durationSecs || 0) + "," + Subsonic.m3uTitle(ordered[j].artist, ordered[j].album, ordered[j].title) + "\n" + ordered[j].path + "\n"
+                for (var j = 0; j < ordered.length; j++) body += "#EXTINF:" + (ordered[j].duration || ordered[j].durationSecs || 0) + "," + Subsonic.m3uTitle(ordered[j].artist, ordered[j].album, ordered[j].title, ordered[j].track || ordered[j].track_number) + "\n" + ordered[j].path + "\n"
                 var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                 root.runCliamp(root.pendingSubRow, action, {
                     "op": "url.load",
