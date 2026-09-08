@@ -133,13 +133,32 @@ def song_id_from_uri(uri):
     return ids[0] if ids else ""
 
 
-def fetch_cover(base, user, password, song_id):
+def auth_query(user, password):
     salt = "".join(random.choices("abcdef0123456789", k=8))
     token = hashlib.md5((password + salt).encode()).hexdigest()
-    art_url = ("%s/rest/getCoverArt?u=%s&t=%s&s=%s&v=1.16.1"
-               "&c=rmpc-art&f=json&id=%s&size=%d"
-               % (base, urllib.parse.quote(user), token, salt,
-                  urllib.parse.quote(song_id), COVER_SIZE))
+    return ("u=%s&t=%s&s=%s&v=1.16.1&c=rmpc-art&f=json"
+            % (urllib.parse.quote(user), token, salt))
+
+
+def album_id_for_song(base, auth, song_id):
+    """Album-level id for a song (getSong). Per-song coverArt rows
+    (dc-*) can go stale server-side and resolve to disc art -- mirror
+    of must's loadSubsonicAlbumArtCmd / amla's subArtId preference."""
+    try:
+        with urllib.request.urlopen(
+                "%s/rest/getSong?%s&id=%s"
+                % (base, auth, urllib.parse.quote(song_id)),
+                timeout=HTTP_TIMEOUT) as req:
+            body = json.load(req)
+        song = (body.get("subsonic-response") or {}).get("song") or {}
+        return str(song.get("albumId") or "")
+    except Exception:  # noqa: BLE001 - caller falls back to song art
+        return ""
+
+
+def fetch_cover(base, auth, art_id):
+    art_url = ("%s/rest/getCoverArt?%s&id=%s&size=%d"
+               % (base, auth, urllib.parse.quote(art_id), COVER_SIZE))
     req = urllib.request.urlopen(art_url, timeout=HTTP_TIMEOUT)
     data = req.read()
     if not req.headers.get_content_type().startswith("image/") or not data:
@@ -160,7 +179,21 @@ def main():
             diag("no subsonic creds, fallback")
             fallback()
             return
-        data = fetch_cover(base, user, password, song_id)
+        auth = auth_query(user, password)
+        ids = []
+        album_id = album_id_for_song(base, auth, song_id)
+        if album_id and album_id != song_id:
+            ids.append(album_id)
+        ids.append(song_id)
+        data = None
+        for art_id in ids:
+            try:
+                data = fetch_cover(base, auth, art_id)
+            except Exception as e:  # noqa: BLE001 - try next id
+                diag("cover fetch failed for %s: %r" % (art_id, e))
+                continue
+            if data is not None:
+                break
         if data is None:
             diag("cover fetch failed via %s, fallback" % src)
             fallback()
