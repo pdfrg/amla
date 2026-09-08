@@ -647,8 +647,9 @@ function matchQuality(title, q) {
 }
 
 // Stable merge: favorite score (already ×1000 when the favorite matches the
-// query, else 0) first, then tier order, then title match quality, then
-// source order.
+// query, else 0) first, then exact title match (typing the exact name
+// means "this one" regardless of kind), then tier order, then prefix
+// above weaker matches, then source order.
 // Local and subsonic kinds share tiers (interleaved by kind); within a
 // tier the source order tiebreak puts local rows first. Containers rank
 // above tracks: collection matches are few, song matches are many.
@@ -659,6 +660,10 @@ function mergeRanked(scoredRows, cap) {
     var fb = b.favScore || 0
     if (fa !== fb)
       return fb - fa
+    var ea = (a.matchScore || 0) === 2 ? 1 : 0
+    var eb = (b.matchScore || 0) === 2 ? 1 : 0
+    if (ea !== eb)
+      return eb - ea
     var ta = TIER_ORDER[a.row.kind] !== undefined ? TIER_ORDER[a.row.kind] : 99
     var tb = TIER_ORDER[b.row.kind] !== undefined ? TIER_ORDER[b.row.kind] : 99
     if (ta !== tb)
