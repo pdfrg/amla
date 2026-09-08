@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2070"
+    readonly property string buildId: "0.5.2080"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -168,6 +168,11 @@ Item {
     // Auto-triggers (facet/search failures) are rate-limited so overlapping
     // failure events can't stack cold scans; manual refresh forces.
     property double lastIndexBuildMs: 0
+    // ----- result building -----
+    // Non-empty query: only the top FavBoostCap favorites keep their
+    // boost; the rest keep the star but fall back to tier order
+    // (demote, don't hide). Empty query is untouched (full fav list).
+    readonly property int favBoostCap: 5
 
     // File-index mode (no must DB, or the debugNoMust simulation): local
     // playback resolves against filesDb.files instead of mustDb.tracks.
@@ -261,7 +266,6 @@ Item {
 
     }
 
-    // ----- result building -----
     function scoredRows(rows, query) {
         var out = [];
         var favs = History.favoriteIndex();
@@ -277,6 +281,18 @@ Item {
                 "favScore": score,
                 "order": i
             });
+        }
+        if (query.length > 0) {
+            var boosted = [];
+            for (var b = 0; b < out.length; b++) if (out[b].favScore > 0) {
+                boosted.push(b);
+            }
+            if (boosted.length > root.favBoostCap) {
+                boosted.sort(function(x, y) {
+                    return out[y].favScore - out[x].favScore;
+                });
+                for (var d = root.favBoostCap; d < boosted.length; d++) out[boosted[d]].favScore = 0
+            }
         }
         return out;
     }
