@@ -38,6 +38,7 @@ function rowKey(row) {
     case "genre":
     case "subsonic-genre":
     case "playlist":
+    case "subsonic-playlist":
     case "temp":
     case "subsonic-artist":
     case "subsonic-album":
@@ -361,6 +362,11 @@ function favoriteRow(it) {
         row.kind = "subsonic-" + kind
         row.coverArt = it.coverArt || ""
         row.albumId = it.albumId || ""
+        row.id = it.subId || ""
+    }
+    if (kind === "playlist" && (it.coverArt || it.subId)) {
+        row.kind = "subsonic-playlist"
+        row.coverArt = it.coverArt || ""
         row.id = it.subId || ""
     }
     if (it.artDir)
