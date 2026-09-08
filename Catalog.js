@@ -631,17 +631,53 @@ var TIER_ORDER = {
   "subsonic-song": 7
 }
 
-// Title match quality vs the raw query: 2 exact, 1 prefix, else 0.
-// Title-only on purpose: a row that matched via another field (a song
-// found through its artist) scores 0 and sinks below title matches.
+// Fold for diacritic-insensitive comparison: lowercase + Latin
+// diacritics stripped (beyoncé → beyonce). Explicit map (not
+// String.normalize) so QML and node behave identically; unknown
+// non-ASCII is dropped symmetrically on both sides.
+var FOLD_MAP = {
+  "à": "a", "á": "a", "â": "a", "ã": "a", "ä": "a", "å": "a", "ā": "a", "ă": "a", "ą": "a", "ǎ": "a",
+  "ç": "c", "ć": "c", "ĉ": "c", "ċ": "c", "č": "c",
+  "ď": "d", "đ": "d", "ð": "d",
+  "è": "e", "é": "e", "ê": "e", "ë": "e", "ē": "e", "ĕ": "e", "ė": "e", "ę": "e", "ě": "e",
+  "ĝ": "g", "ğ": "g", "ġ": "g", "ģ": "g",
+  "ĥ": "h", "ħ": "h",
+  "ì": "i", "í": "i", "î": "i", "ï": "i", "ĩ": "i", "ī": "i", "ĭ": "i", "į": "i", "ı": "i", "ǐ": "i",
+  "ĵ": "j",
+  "ķ": "k",
+  "ĺ": "l", "ļ": "l", "ľ": "l", "ŀ": "l", "ł": "l",
+  "ñ": "n", "ń": "n", "ņ": "n", "ň": "n",
+  "ò": "o", "ó": "o", "ô": "o", "õ": "o", "ö": "o", "ø": "o", "ō": "o", "ŏ": "o", "ő": "o", "ǒ": "o",
+  "œ": "oe", "æ": "ae",
+  "ŕ": "r", "ŗ": "r", "ř": "r",
+  "ś": "s", "ŝ": "s", "ş": "s", "š": "s", "ș": "s", "ß": "ss",
+  "ţ": "t", "ť": "t", "ŧ": "t", "ț": "t",
+  "ù": "u", "ú": "u", "û": "u", "ü": "u", "ũ": "u", "ū": "u", "ŭ": "u", "ů": "u", "ű": "u", "ų": "u", "ǔ": "u",
+  "ŵ": "w",
+  "ý": "y", "ÿ": "y", "ŷ": "y",
+  "ź": "z", "ż": "z", "ž": "z"
+}
+
+function fold(s) {
+  return String(s || "").toLowerCase().replace(/[^\u0000-\u007f]/g, function (c) {
+    return FOLD_MAP[c] || ""
+  })
+}
+
+// Title match quality vs the raw query: 3 exact, 2 prefix, 1 substring,
+// 0 otherwise (e.g. a song found through its artist). Title-only on
+// purpose: weaker matches sink below title matches. Compared folded so
+// "beyonce" exactly matches "Beyoncé".
 function matchQuality(title, q) {
-  var t = String(title || "").toLowerCase()
-  var query = String(q || "").toLowerCase()
+  var t = fold(title)
+  var query = fold(q)
   if (query.length === 0 || t.length === 0)
     return 0
   if (t === query)
-    return 2
+    return 3
   if (t.indexOf(query) === 0)
+    return 2
+  if (t.indexOf(query) > 0)
     return 1
   return 0
 }
@@ -660,8 +696,8 @@ function mergeRanked(scoredRows, cap) {
     var fb = b.favScore || 0
     if (fa !== fb)
       return fb - fa
-    var ea = (a.matchScore || 0) === 2 ? 1 : 0
-    var eb = (b.matchScore || 0) === 2 ? 1 : 0
+    var ea = (a.matchScore || 0) === 3 ? 1 : 0
+    var eb = (b.matchScore || 0) === 3 ? 1 : 0
     if (ea !== eb)
       return eb - ea
     var ta = TIER_ORDER[a.row.kind] !== undefined ? TIER_ORDER[a.row.kind] : 99
