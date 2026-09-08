@@ -622,15 +622,19 @@ var TIER_ORDER = {
   playlist: 6,
   temp: 7,
   library: 7,
-  "subsonic-artist": 8,
-  "subsonic-album": 9,
-  "subsonic-song": 10,
-  "subsonic-genre": 11,
-  "subsonic-year": 12
+  "subsonic-artist": 0,
+  "subsonic-album": 1,
+  "subsonic-song": 2,
+  "subsonic-genre": 3,
+  "subsonic-year": 4,
+  "subsonic-decade": 5,
+  "subsonic-playlist": 6
 }
 
 // Stable merge: favorite score (already ×1000 when the favorite matches the
 // query, else 0) first, then tier order, then source order.
+// Local and subsonic kinds share tiers (interleaved by kind); within a
+// tier the source order tiebreak puts local rows first.
 function mergeRanked(scoredRows, cap) {
   var rows = scoredRows.slice()
   rows.sort(function (a, b) {
