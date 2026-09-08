@@ -148,11 +148,14 @@ function build(action, row, target, ctx) {
         }
         if (action === "playshuffle") {
             var psq = row && row.kind !== "action" && row.title ? row.title : (ctx.query || "")
-            // Playlist rows shuffle their own contents: must's ctlPlay
-            // shuffles whatever it resolves, so hand it the playlist
-            // resolver (saved name) or the synthesized m3u (toml source)
-            // instead of a free-text query, which would FTS-miss.
-            var psArgs = "playshuffle " + shq(psq)
+            // Prefer the kind resolver over free text: resolvers order
+            // their material (album/track order), while a free-text
+            // query resolves in FTS rank order — stable but
+            // shuffled-looking in the playlist pane. Playback shuffles
+            // either way (ctlPlay builds shuffleOrder). Playlist rows
+            // keep their special-casing below (saved name / staged m3u).
+            var psRes = row ? mustResolver(row) : ""
+            var psArgs = "playshuffle " + ((psRes.length > 0 && row.kind !== "playlist" && row.kind !== "subsonic-playlist") ? psRes : shq(psq))
             if (row && (row.kind === "playlist" || row.kind === "subsonic-playlist")) {
                 if (ctx.resolvedM3u)
                     psArgs = "playshuffle " + shq(ctx.resolvedM3u)
