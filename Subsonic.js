@@ -307,7 +307,8 @@ function searchRows(sub, serverName, serverBadge, query) {
             "coverArt": a.coverArt || "",
             "albumId": a.albumId || "",
             "id": a.id || "",
-            "duration": a.duration || 0
+            "duration": a.duration || 0,
+            "track": a.track || ""
         })
     }
     return out

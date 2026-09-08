@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2060"
+    readonly property string buildId: "0.5.2070"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -448,7 +448,8 @@ Item {
                 "subtitle": row.subtitle || "",
                 "path": row.path || "",
                 "coverArt": row.coverArt || "",
-                "subId": row.id || ""
+                "subId": row.id || "",
+                "track": row.track || ""
             };
         case "album":
         case "subsonic-album":
@@ -653,6 +654,7 @@ Item {
                     "artist": row.artist || "",
                     "album": row.album || "",
                     "duration_secs": row.duration || 0,
+                    "track_number": row.track || 0,
                     "provider_meta": meta
                 };
                 if (action === "play" || action === "playshuffle") {
@@ -829,7 +831,8 @@ Item {
                         "artist": row.artist || "",
                         "album": row.album || "",
                         "title": row.titleField || row.title,
-                        "duration": row.duration || 0
+                        "duration": row.duration || 0,
+                        "track": row.track || ""
                     }]));
                     return ;
                 }
