@@ -631,8 +631,24 @@ var TIER_ORDER = {
   "subsonic-song": 7
 }
 
+// Title match quality vs the raw query: 2 exact, 1 prefix, else 0.
+// Title-only on purpose: a row that matched via another field (a song
+// found through its artist) scores 0 and sinks below title matches.
+function matchQuality(title, q) {
+  var t = String(title || "").toLowerCase()
+  var query = String(q || "").toLowerCase()
+  if (query.length === 0 || t.length === 0)
+    return 0
+  if (t === query)
+    return 2
+  if (t.indexOf(query) === 0)
+    return 1
+  return 0
+}
+
 // Stable merge: favorite score (already ×1000 when the favorite matches the
-// query, else 0) first, then tier order, then source order.
+// query, else 0) first, then tier order, then title match quality, then
+// source order.
 // Local and subsonic kinds share tiers (interleaved by kind); within a
 // tier the source order tiebreak puts local rows first. Containers rank
 // above tracks: collection matches are few, song matches are many.
@@ -647,6 +663,10 @@ function mergeRanked(scoredRows, cap) {
     var tb = TIER_ORDER[b.row.kind] !== undefined ? TIER_ORDER[b.row.kind] : 99
     if (ta !== tb)
       return ta - tb
+    var ma = a.matchScore || 0
+    var mb = b.matchScore || 0
+    if (ma !== mb)
+      return mb - ma
     return a.order - b.order
   })
   var out = []

@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2100"
+    readonly property string buildId: "0.5.2110"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -279,6 +279,7 @@ Item {
             out.push({
                 "row": rows[i],
                 "favScore": score,
+                "matchScore": Catalog.matchQuality(rows[i].title, query),
                 "order": i
             });
         }
