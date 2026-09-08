@@ -366,7 +366,7 @@ function parseListing(out) {
 // years: [{y: 1997, n: 4}, ...]
 function facetRows(genres, years, q) {
   var rows = []
-  var query = String(q || "").toLowerCase()
+  var query = fold(q)
   if (query.length === 0)
     return rows
   var seenDecades = {}
@@ -400,7 +400,7 @@ function facetRows(genres, years, q) {
   var prefix = []
   var sub = []
   for (var j = 0; j < genres.length; j++) {
-    var gl = String(genres[j].g).toLowerCase()
+    var gl = fold(genres[j].g)
     var grow = {
       kind: "genre",
       badge: "",
@@ -531,12 +531,12 @@ function parseTempName(name, noiseTokens) {
 // NOTE: dir-level library rows were removed (no-must is the normal mode
 // and the file index supersedes them); temp dirs stay by design.
 function listingRows(listing, q, noiseTokens) {
-  var query = String(q || "").toLowerCase()
+  var query = fold(q)
   var rows = []
   for (var i = 0; i < listing.playlists.length; i++) {
     var pl = listing.playlists[i]
     var name = basename(pl.path).replace(/\.(m3u8?|M3U8?|toml|TOML)$/, "")
-    if (query.length === 0 || name.toLowerCase().indexOf(query) >= 0) {
+    if (query.length === 0 || fold(name).indexOf(query) >= 0) {
       // Counts come from the listing pass (m3u entries exact, toml
       // [[track]] sections with + when [[dir]]-backed and unbounded).
       var n = pl.count >= 0 ? String(pl.count) + (pl.dirBacked ? "+" : "") : "?"
@@ -556,7 +556,7 @@ function listingRows(listing, q, noiseTokens) {
   for (i = 0; i < listing.temp.length; i++) {
     var tp = listing.temp[i]
     var tname = basename(tp)
-    if (query.length === 0 || tname.toLowerCase().indexOf(query) >= 0) {
+    if (query.length === 0 || fold(tname).indexOf(query) >= 0) {
       // §14: strip tag salad so the row reads "Artist - Album"
       // (query still matches the raw folder name above).
       var parsed = parseTempName(tname, noiseTokens)
@@ -841,7 +841,8 @@ function filesDbSchema() {
         "album_artist TEXT DEFAULT '', year INTEGER DEFAULT 0, genre TEXT DEFAULT '', " +
         "track_num INTEGER DEFAULT 0, duration INTEGER DEFAULT 0, mtime INTEGER DEFAULT 0, source TEXT DEFAULT 'file');" +
         "CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5" +
-        "(title, artist, album, album_artist, genre, content='files', content_rowid='rowid');" +
+        "(title, artist, album, album_artist, genre, content='files', content_rowid='rowid', " +
+        "tokenize = \"unicode61 remove_diacritics 1\");" +
         "CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN " +
         "INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre) " +
         "VALUES (new.rowid, new.title, new.artist, new.album, new.album_artist, new.genre); END;" +
@@ -853,4 +854,18 @@ function filesDbSchema() {
         "VALUES ('delete', old.rowid, old.title, old.artist, old.album, old.album_artist, old.genre); " +
         "INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre) " +
         "VALUES (new.rowid, new.title, new.artist, new.album, new.album_artist, new.genre); END;"
+}
+
+// One-shot migration for pre-diacritics indexes: the FTS tokenizer is
+// fixed at CREATE TABLE time, so drop + recreate + repopulate from the
+// files table (fast, no tag rescan). Guarded by the caller: only run
+// when files_fts's sql lacks remove_diacritics.
+function filesFtsMigration() {
+    return "DROP TRIGGER IF EXISTS files_ai;" +
+        "DROP TRIGGER IF EXISTS files_ad;" +
+        "DROP TRIGGER IF EXISTS files_au;" +
+        "DROP TABLE IF EXISTS files_fts;" +
+        filesDbSchema() +
+        "INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre) " +
+        "SELECT rowid, title, artist, album, album_artist, genre FROM files;"
 }

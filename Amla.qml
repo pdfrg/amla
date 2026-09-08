@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2140"
+    readonly property string buildId: "0.5.2150"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -2630,15 +2630,19 @@ Item {
     }
 
     // amla-owned file index (§13): schema created idempotently at startup;
-    // the tag builder (later slice) only ever INSERTs into it.
+    // the tag builder (later slice) only ever INSERTs into it. The FTS
+    // tokenizer is fixed at CREATE TABLE time, so a pre-diacritics index
+    // is migrated once (drop + recreate + repopulate from files — fast,
+    // no tag rescan) when its sql lacks remove_diacritics.
     Process {
         id: filesDbSetup
 
         environment: {
             "AMLA_DB": root.filesDb,
-            "AMLA_SCHEMA": Catalog.filesDbSchema()
+            "AMLA_SCHEMA": Catalog.filesDbSchema(),
+            "AMLA_FTS_MIGRATION": Catalog.filesFtsMigration()
         }
-        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${AMLA_DB%/*}\" && /usr/bin/sqlite3 \"$AMLA_DB\" \"$AMLA_SCHEMA\""]
+        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${AMLA_DB%/*}\" && /usr/bin/sqlite3 \"$AMLA_DB\" \"$AMLA_SCHEMA\" && if ! /usr/bin/sqlite3 \"$AMLA_DB\" \"SELECT sql FROM sqlite_master WHERE name='files_fts';\" | /usr/bin/grep -q remove_diacritics; then /usr/bin/sqlite3 \"$AMLA_DB\" \"$AMLA_FTS_MIGRATION\"; fi"]
         running: true
     }
 

@@ -3,6 +3,37 @@
 // runs elsewhere (fetch in tests, curl via Process in the plugin).
 // Auth per plan: token = md5(password+salt), params u,t,s,v,c=amla.
 
+// Fold for diacritic-insensitive comparison. Mirror of Catalog.fold
+// (separate JS context — the two copies must stay in sync).
+var FOLD_MAP = {
+  "à": "a", "á": "a", "â": "a", "ã": "a", "ä": "a", "å": "a", "ā": "a", "ă": "a", "ą": "a", "ǎ": "a",
+  "ç": "c", "ć": "c", "ĉ": "c", "ċ": "c", "č": "c",
+  "ď": "d", "đ": "d", "ð": "d",
+  "è": "e", "é": "e", "ê": "e", "ë": "e", "ē": "e", "ĕ": "e", "ė": "e", "ę": "e", "ě": "e",
+  "ĝ": "g", "ğ": "g", "ġ": "g", "ģ": "g",
+  "ĥ": "h", "ħ": "h",
+  "ì": "i", "í": "i", "î": "i", "ï": "i", "ĩ": "i", "ī": "i", "ĭ": "i", "į": "i", "ı": "i", "ǐ": "i",
+  "ĵ": "j",
+  "ķ": "k",
+  "ĺ": "l", "ļ": "l", "ľ": "l", "ŀ": "l", "ł": "l",
+  "ñ": "n", "ń": "n", "ņ": "n", "ň": "n",
+  "ò": "o", "ó": "o", "ô": "o", "õ": "o", "ö": "o", "ø": "o", "ō": "o", "ŏ": "o", "ő": "o", "ǒ": "o",
+  "œ": "oe", "æ": "ae",
+  "ŕ": "r", "ŗ": "r", "ř": "r",
+  "ś": "s", "ŝ": "s", "ş": "s", "š": "s", "ș": "s", "ß": "ss",
+  "ţ": "t", "ť": "t", "ŧ": "t", "ț": "t",
+  "ù": "u", "ú": "u", "û": "u", "ü": "u", "ũ": "u", "ū": "u", "ŭ": "u", "ů": "u", "ű": "u", "ų": "u", "ǔ": "u",
+  "ŵ": "w",
+  "ý": "y", "ÿ": "y", "ŷ": "y",
+  "ź": "z", "ż": "z", "ž": "z"
+}
+
+function fold(s) {
+  return String(s || "").toLowerCase().replace(/[^\u0000-\u007f]/g, function (c) {
+    return FOLD_MAP[c] || ""
+  })
+}
+
 function authParams(username, password, salt) {
     return "u=" + encodeURIComponent(username) +
         "&t=" + Md5.subsonicToken(password, salt) +
@@ -148,12 +179,12 @@ function playlistList(sub) {
 // on empty query), matched by name substring.
 function playlistRows(lists, serverBadge, q) {
     var rows = []
-    var query = String(q || "").toLowerCase()
+    var query = fold(q)
     if (query.length === 0)
         return rows
     for (var i = 0; i < (lists || []).length; i++) {
         var name = String(lists[i].name || "")
-        if (name.toLowerCase().indexOf(query) < 0)
+        if (fold(name).indexOf(query) < 0)
             continue
         var n = lists[i].n || 0
         rows.push({
@@ -255,12 +286,12 @@ function searchRows(sub, serverName, serverBadge, query) {
     var out = []
     if (!sub)
         return out
-    var q = String(query || "").toLowerCase()
+    var q = fold(query)
     var i, a
     var artists = (sub.searchResult3 && sub.searchResult3.artist) || []
     for (i = 0; i < artists.length; i++) {
         a = artists[i]
-        if (String(a.name).toLowerCase().indexOf(q) < 0)
+        if (fold(a.name).indexOf(q) < 0)
             continue
         var an = parseInt(a.albumCount, 10) || 0
         out.push({
@@ -276,7 +307,7 @@ function searchRows(sub, serverName, serverBadge, query) {
     var albums = (sub.searchResult3 && sub.searchResult3.album) || []
     for (i = 0; i < albums.length; i++) {
         a = albums[i]
-        if (String(a.name).toLowerCase().indexOf(q) < 0 && String(a.artist || "").toLowerCase().indexOf(q) < 0)
+        if (fold(a.name).indexOf(q) < 0 && fold(a.artist || "").indexOf(q) < 0)
             continue
         var sn = parseInt(a.songCount, 10) || 0
         out.push({
@@ -294,7 +325,7 @@ function searchRows(sub, serverName, serverBadge, query) {
     var songs = (sub.searchResult3 && sub.searchResult3.song) || []
     for (i = 0; i < songs.length; i++) {
         a = songs[i]
-        if (String(a.title).toLowerCase().indexOf(q) < 0 && String(a.artist || "").toLowerCase().indexOf(q) < 0)
+        if (fold(a.title).indexOf(q) < 0 && fold(a.artist || "").indexOf(q) < 0)
             continue
         out.push({
             "kind": "subsonic-song",

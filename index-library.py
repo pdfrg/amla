@@ -63,7 +63,8 @@ track_num INTEGER DEFAULT 0, duration INTEGER DEFAULT 0,
 mtime INTEGER DEFAULT 0, source TEXT DEFAULT 'file');
 CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
 title, artist, album, album_artist, genre,
-content='files', content_rowid='rowid');
+content='files', content_rowid='rowid',
+tokenize = "unicode61 remove_diacritics 1");
 CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
 INSERT INTO files_fts(rowid, title, artist, album, album_artist, genre)
 VALUES (new.rowid, new.title, new.artist, new.album,
