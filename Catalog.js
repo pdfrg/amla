@@ -615,26 +615,27 @@ function shuffleM3uBody(body) {
 var TIER_ORDER = {
   artist: 0,
   album: 1,
-  song: 2,
+  playlist: 2,
   genre: 3,
   year: 4,
   decade: 5,
-  playlist: 6,
-  temp: 7,
-  library: 7,
+  temp: 6,
+  library: 6,
+  song: 7,
   "subsonic-artist": 0,
   "subsonic-album": 1,
-  "subsonic-song": 2,
+  "subsonic-playlist": 2,
   "subsonic-genre": 3,
   "subsonic-year": 4,
   "subsonic-decade": 5,
-  "subsonic-playlist": 6
+  "subsonic-song": 7
 }
 
 // Stable merge: favorite score (already ×1000 when the favorite matches the
 // query, else 0) first, then tier order, then source order.
 // Local and subsonic kinds share tiers (interleaved by kind); within a
-// tier the source order tiebreak puts local rows first.
+// tier the source order tiebreak puts local rows first. Containers rank
+// above tracks: collection matches are few, song matches are many.
 function mergeRanked(scoredRows, cap) {
   var rows = scoredRows.slice()
   rows.sort(function (a, b) {
