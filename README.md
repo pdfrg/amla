@@ -30,8 +30,9 @@ Favorites learn from your play history and surface as you type. Dispatches to
   play, enqueue, play-next, playshuffle, random albums, playlists — local
   files queue by path, Subsonic items as tagged stream URLs with preloaded
   Artist/Album/Title/Track/Date (stream durations can't be set through the
-  MPD protocol, and server items show no artwork in MPD clients — both are
-  daemon limitations, not amla gaps). Playshuffle keeps the queue in
+  MPD protocol — a daemon limitation, not an amla gap; artwork in
+  terminal clients is opt-in via the shipped `rmpc_art.py` custom-loader
+  hook, inert unless your rmpc enables it — see its header). Playshuffle keeps the queue in
   album/track order and switches the daemon to random mode, like the other
   targets. No TUI to launch: an unreachable daemon notifies instead.
 
@@ -192,9 +193,15 @@ server_badge = 'N'
   — hand-edits need `omarchy restart shell` (see above)
 - amla's file index: `~/.cache/amla/files.db` (songs, WAL + FTS5)
 - must's library DB is read-only: `~/.cache/must/library.db` (FTS5)
+- `$XDG_RUNTIME_DIR/amla/` holds per-dispatch staging files (`queue.m3u`
+  for cliamp, `mpd_queue.json` for MPD, `subpl.m3u` for server playlists)
+  plus a per-dispatch serial so identical re-dispatches never no-op
 - `scripts/warm-art-cache.sh` is optional: it pre-downloads all Navidrome
   covers into `~/.cache/amla/art` so browsing never waits on the network —
   without it, thumbnails simply load on demand when the popup opens
+- `rmpc_art.py` is optional: an rmpc `album_art.custom_loader` hook for
+  Subsonic stream covers (parses the song id from the stream URL →
+  `getCoverArt`); never runs unless your rmpc config enables it
 
 Capabilities, network use, and trust boundaries are disclosed in
 [`SECURITY.md`](SECURITY.md).

@@ -2483,12 +2483,12 @@ Item {
                     // the playshuffle rewrite (clear-first + shuffle).
                     if (prow && (prow.kind === "temp" || prow.kind === "library") && prow.path)
                         root.runCliamp(prow, action, {
-                            "op": "url.load",
-                            "params": {
-                                "path": prow.path
-                            },
-                            "launchTarget": prow.path
-                        });
+                        "op": "url.load",
+                        "params": {
+                            "path": prow.path
+                        },
+                        "launchTarget": prow.path
+                    });
 
                     return ;
                 }

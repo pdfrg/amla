@@ -25,6 +25,8 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | `/usr/bin/python3 <plugindir>/index-library.py` | background tag scan over the music roots into amla's own `files.db` (mutagen → ffprobe → filename ladder, one run at a time, incremental; no timeout — a cold scan of a huge library runs minutes) | roots passed as argv (visible to same-user `ps`, same residual as below); tags parsed from file bytes, never executed |
 | `ffprobe` (bare name, only if the user installed it) | tag reader rung inside the script above: `-v quiet -print_format json -show_format <path>`, per-file 30 s timeout | **not** absolute-pathed — resolved via `PATH`, so the shell-env residual below applies fully; JSON output parsed, never executed |
 | `/usr/bin/{mkdir,rm,ls,find,sed,sort,wc}` | cache/state dir setup, temp-dir listing, art probing | paths single-quote wrapped |
+| `scripts/warm-art-cache.sh` (manual, user-run, never auto-executed) | pre-downloads Navidrome covers into `~/.cache/amla/art` | reads must `[subsonic]` creds, token auth like the plugin |
+| `<plugindir>/rmpc_art.py` (runs under rmpc, never spawned by amla) | `album_art.custom_loader` hook: Subsonic stream covers for rmpc | song id parsed from `$FILE` stream URL; creds mirror pickSubsonic (must → cliamp → amla-owned); always exits 0, `fallback` on any failure |
 
 No `sudo`, `pkexec`, `setcap`, package installs, or privilege escalation of
 any kind. No compiler, downloader, or runtime dependency beyond the table
