@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2155"
+    readonly property string buildId: "0.5.2156"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -408,7 +408,7 @@ Item {
         if (root.subEnabled) {
             subSearchProc.query = q;
             subSearchProc.auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subSearchProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
+            subSearchProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
             subSearchProc.running = true;
         }
     }
@@ -608,7 +608,7 @@ Item {
                 pendingSubAction = "play";
                 pendingSubRow = null;
                 root.randomFallbackLocal = action === "random-album";
-                subRandomProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+                subRandomProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
                 subRandomProc.running = true;
                 root.cancel();
                 return ;
@@ -925,7 +925,7 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             pendingSubTarget = "must";
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, compatAuth, row.id)];
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, compatAuth, row.id)];
             subPlaylistProc.running = true;
             return ;
         }
@@ -1038,7 +1038,7 @@ Item {
             root.pendingSubAction = "play";
             root.pendingSubRow = null;
             root.pendingSubTarget = "mpd";
-            subRandomProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
+            subRandomProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
             subRandomProc.running = true;
             root.cancel();
             return ;
@@ -1202,27 +1202,27 @@ Item {
     function dispatchSubsonicMpd(row, action) {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         if (row.kind === "subsonic-album" && row.id && String(row.id).length > 0) {
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, row.id)];
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, row.id)];
             subFallbackProc.running = true;
         } else if (row.kind === "subsonic-artist") {
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100)];
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100)];
             subFallbackProc.running = true;
         } else if (row.kind === "subsonic-genre") {
-            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
+            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
             subGenreProc.running = true;
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
             var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
-            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
+            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
             subYearListProc.running = true;
         } else if (row.kind === "subsonic-playlist" && row.id) {
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
             subPlaylistProc.running = true;
         } else {
             // Id-less album row (e.g. from history): REST search over
             // "artist album", mirroring subProviderFallback.
             var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, q, 100)];
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, q, 100)];
             subFallbackProc.running = true;
         }
     }
@@ -1364,7 +1364,7 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             var shufAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, shufAuth, row.id)];
+            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, shufAuth, row.id)];
             subFallbackProc.running = true;
             return ;
         }
@@ -1429,12 +1429,12 @@ Item {
         pendingSubAction = action;
         pendingSubRow = row;
         if (row.kind === "subsonic-genre") {
-            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
+            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
             subGenreProc.running = true;
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
             var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
-            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
+            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
             subYearListProc.running = true;
         } else if (row.kind === "subsonic-playlist" && row.id) {
             // Server-side playlist: one getPlaylist hop, then the shared
@@ -1442,7 +1442,7 @@ Item {
             // dispatches to whichever target armed the fetch.
             pendingSubAction = action;
             pendingSubRow = row;
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
+            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
             subPlaylistProc.running = true;
         } else {
             // Id-less album row (e.g. from history): provider.search over
@@ -1485,7 +1485,7 @@ Item {
         if (!url)
             return ;
 
-        subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", url];
+        subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", url];
         subFallbackProc.running = true;
     }
 
@@ -1559,7 +1559,7 @@ Item {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         subBackfillProc.current = next;
         var url = next.stype === "album" ? Subsonic.backfillAlbumUrl(root.sub.url, auth, next.artist, next.album) : Subsonic.backfillSongUrl(root.sub.url, auth, next.artist, next.title);
-        subBackfillProc.command = ["/usr/bin/curl", "-s", "--max-time", "5", url];
+        subBackfillProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", url];
         subBackfillProc.running = true;
     }
 
@@ -1673,7 +1673,7 @@ Item {
         }
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-time 10 '" + Subsonic.playlistsUrl(root.sub.url, auth) + "'"];
+            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-filesize 2097152 --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.playlistsUrl(root.sub.url, auth) + "'"];
             subFacetProc.running = true;
         }
     }
@@ -1751,7 +1751,7 @@ Item {
         var ids = root.yearQueue.splice(0, 12);
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         var parts = [];
-        for (var i = 0; i < ids.length; i++) parts.push("/usr/bin/curl -s --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, ids[i]) + "'; echo ---AMLAYEAR---")
+        for (var i = 0; i < ids.length; i++) parts.push("/usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, ids[i]) + "'; echo ---AMLAYEAR---")
         subYearExpandProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p '" + root.runtimeDir + "/amla' && " + parts.join("; ")];
         subYearExpandProc.running = true;
     }
@@ -2523,7 +2523,7 @@ Item {
                 root.pendingSubAction = "play";
                 root.pendingSubRow = fb;
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, fb.id)];
+                subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, fb.id)];
                 subFallbackProc.running = true;
                 return ;
             }

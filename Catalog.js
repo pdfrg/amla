@@ -748,7 +748,7 @@ function artProbeCommand(jobs) {
         var out = job.out
         if (job.url) {
             lines.push("if [ -f " + shq(out) + " ]; then echo A" + shq(job.dir + "|" + out) +
-                "; else /usr/bin/rm -f " + shq(out) + "; /usr/bin/curl -fs --max-time 10 -o " + shq(out) + " " + shq(job.url) +
+                "; else /usr/bin/rm -f " + shq(out) + "; /usr/bin/curl -fs --max-filesize 1048576 --max-time 10 -o " + shq(out) + " " + shq(job.url) +
                 " && echo A" + shq(job.dir + "|" + out) + "; fi")
         } else {
             var candidates = ["folder.jpg", "cover.jpg", "album.jpg", "front.jpg", "front.png", "artist.jpg", "artist.png"]

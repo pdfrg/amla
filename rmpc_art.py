@@ -32,6 +32,15 @@ import urllib.request
 
 COVER_SIZE = 500
 HTTP_TIMEOUT = 15
+# Producer-side byte ceilings (a compromised/faulty server must not be
+# able to exhaust memory: Content-Length is pre-checked AND bodies are
+# streamed with a MAX+1 cap, since chunked responses have no length).
+# getSong responses are ~1-2 KiB; size=500 JPEG covers are tens of KiB.
+JSON_MAX = 256 * 1024
+IMAGE_MAX = 10 * 1024 * 1024
+# Decoded-pixel bound (header check only; rmpc does the actual decode).
+DIM_MAX = 4096
+MAX_REDIRECTS = 3
 
 
 def diag(msg):
@@ -140,17 +149,137 @@ def auth_query(user, password):
             % (urllib.parse.quote(user), token, salt))
 
 
+class RedirectBlocked(Exception):
+    pass
+
+
+def _origin(url):
+    p = urllib.parse.urlparse(url)
+    default_port = 443 if p.scheme.lower() == "https" else 80
+    return (p.scheme.lower(), (p.hostname or "").lower(),
+            p.port or default_port)
+
+
+class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only back to the configured server's own origin
+    (scheme+host+port), bounded hop count. Anything else -- notably a
+    redirect carrying our query-string auth token to a third party -- is
+    blocked and the caller falls back."""
+    def __init__(self, base_origin):
+        super().__init__()
+        self.base_origin = base_origin
+        self.hops = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self.hops += 1
+        if self.hops > MAX_REDIRECTS or _origin(newurl) != self.base_origin:
+            raise RedirectBlocked("redirect to %s blocked" % newurl)
+        return super().redirect_request(req, fp, code, msg, headers,
+                                        newurl)
+
+
+def bounded_get(url, max_bytes, expect):
+    """GET with same-origin redirect policy, Content-Type gate checked
+    BEFORE reading, Content-Length pre-check, and streaming MAX+1 read
+    (covers lying/omitted lengths). Returns (body, content_type)."""
+    opener = urllib.request.build_opener(
+        SameOriginRedirectHandler(_origin(url)))
+    req = opener.open(url, timeout=HTTP_TIMEOUT)
+    try:
+        ctype = (req.headers.get_content_type() or "").lower()
+        if expect == "json":
+            if (ctype and "json" not in ctype and "text" not in ctype
+                    and "javascript" not in ctype):
+                raise ValueError("unexpected content type %r" % ctype)
+        elif expect == "image":
+            if not ctype.startswith("image/"):
+                raise ValueError("unexpected content type %r" % ctype)
+        declared = req.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > max_bytes:
+                    raise ValueError("content-length %s exceeds cap"
+                                     % declared)
+            except ValueError as e:
+                if "exceeds cap" in str(e):
+                    raise
+                # Unparseable length: fall through to the streaming cap.
+        chunks = []
+        total = 0
+        while True:
+            chunk = req.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("body exceeds %d-byte cap" % max_bytes)
+            chunks.append(chunk)
+        return b"".join(chunks), ctype
+    finally:
+        try:
+            req.close()
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
+
+def image_dimensions(data):
+    """(width, height) from PNG/JPEG/GIF/WebP headers without decoding,
+    else None. stdlib only."""
+    import struct
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", data[16:24])
+    if len(data) >= 10 and data[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", data[6:10])
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        if len(data) >= 30 and data[12:16] == b"VP8X":
+            w = struct.unpack("<I", data[24:27] + b"\x00")[0] + 1
+            h = struct.unpack("<I", data[27:30] + b"\x00")[0] + 1
+            return (w, h)
+        if len(data) >= 30 and data[12:16] == b"VP8 ":
+            w = struct.unpack("<H", data[26:28])[0] & 0x3FFF
+            h = struct.unpack("<H", data[28:30])[0] & 0x3FFF
+            return (w, h)
+        if len(data) >= 25 and data[12:16] == b"VP8L":
+            b1, b2, b3, b4 = data[21:25]
+            w = 1 + (((b2 & 0x3F) << 8) | b1)
+            h = 1 + (((b4 & 0x0F) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6))
+            return (w, h)
+        return None
+    if len(data) >= 4 and data[:2] == b"\xff\xd8":
+        # JPEG: walk segment markers to the first SOFn (bounded steps).
+        off = 2
+        for _ in range(64):
+            if off + 4 > len(data) or data[off] != 0xFF:
+                return None
+            marker = data[off + 1]
+            if marker in (0xD8, 0xD9, 0x01) or 0xD0 <= marker <= 0xD7:
+                off += 2
+                continue
+            seg_len = struct.unpack(">H", data[off + 2:off + 4])[0]
+            if seg_len < 2:
+                return None
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                          0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                if off + 9 > len(data):
+                    return None
+                h = struct.unpack(">H", data[off + 5:off + 7])[0]
+                w = struct.unpack(">H", data[off + 7:off + 9])[0]
+                return (w, h)
+            off += 2 + seg_len
+        return None
+    return None
+
+
 def album_id_for_song(base, auth, song_id):
     """Album-level id for a song (getSong). Per-song coverArt rows
     (dc-*) can go stale server-side and resolve to disc art -- mirror
     of must's loadSubsonicAlbumArtCmd / amla's subArtId preference."""
     try:
-        with urllib.request.urlopen(
-                "%s/rest/getSong?%s&id=%s"
-                % (base, auth, urllib.parse.quote(song_id)),
-                timeout=HTTP_TIMEOUT) as req:
-            body = json.load(req)
-        song = (body.get("subsonic-response") or {}).get("song") or {}
+        body, _ = bounded_get(
+            "%s/rest/getSong?%s&id=%s"
+            % (base, auth, urllib.parse.quote(song_id)), JSON_MAX, "json")
+        sub = json.loads(body.decode("utf-8", "replace"))
+        song = (sub.get("subsonic-response") or {}).get("song") or {}
         return str(song.get("albumId") or "")
     except Exception:  # noqa: BLE001 - caller falls back to song art
         return ""
@@ -159,9 +288,12 @@ def album_id_for_song(base, auth, song_id):
 def fetch_cover(base, auth, art_id):
     art_url = ("%s/rest/getCoverArt?%s&id=%s&size=%d"
                % (base, auth, urllib.parse.quote(art_id), COVER_SIZE))
-    req = urllib.request.urlopen(art_url, timeout=HTTP_TIMEOUT)
-    data = req.read()
-    if not req.headers.get_content_type().startswith("image/") or not data:
+    data, _ = bounded_get(art_url, IMAGE_MAX, "image")
+    if not data:
+        return None
+    dims = image_dimensions(data)
+    if dims is not None and (dims[0] > DIM_MAX or dims[1] > DIM_MAX):
+        diag("cover dimensions %dx%d exceed cap, skipping" % dims)
         return None
     return data
 

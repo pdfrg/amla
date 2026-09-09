@@ -32,11 +32,27 @@ AUTH="u=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv
 IDS=$(python3 - "$URL" "$AUTH" <<'PY'
 import json, sys, urllib.request
 url, auth = sys.argv[1], sys.argv[2]
+JSON_MAX = 2 * 1024 * 1024  # paged album listings are ~hundreds of KiB
 ids, offset = [], 0
 while True:
     u = f"{url.rstrip('/')}/rest/getAlbumList2?{auth}&type=byYear&fromYear=0&toYear=9999&size=500&offset={offset}"
-    with urllib.request.urlopen(u, timeout=15) as r:
-        sub = json.load(r)["subsonic-response"]
+    req = urllib.request.urlopen(u, timeout=15)
+    try:
+        declared = req.headers.get("Content-Length")
+        if declared is not None and int(declared) > JSON_MAX:
+            raise ValueError("getAlbumList2 response exceeds cap")
+        chunks, total = [], 0
+        while True:
+            chunk = req.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > JSON_MAX:
+                raise ValueError("getAlbumList2 response exceeds cap")
+            chunks.append(chunk)
+        sub = json.loads(b"".join(chunks).decode("utf-8", "replace"))["subsonic-response"]
+    finally:
+        req.close()
     albums = (sub.get("albumList2") or {}).get("album") or []
     for a in albums:
         cid = a.get("coverArt") or a.get("id")
@@ -59,7 +75,7 @@ printf '%s\n' "$IDS" | while read -r CID; do
   OUT="$CACHE/$SAFE-96.jpg"
   [ -f "$OUT" ] && continue
   ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$CID")
-  if curl -fs --max-time 15 -o "$OUT" "$URL/rest/getCoverArt?$AUTH&id=$ENC&size=96"; then
+  if curl -fs --max-time 15 --max-filesize 1048576 -o "$OUT" "$URL/rest/getCoverArt?$AUTH&id=$ENC&size=96"; then
     DONE=$((DONE+1))
   else
     rm -f "$OUT"

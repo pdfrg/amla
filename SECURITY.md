@@ -14,7 +14,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | Tool | Purpose | Input shaping |
 |---|---|---|
 | `/usr/bin/sqlite3 -readonly` | read-only queries over must's `library.db` (FTS5 + aggregates) | user query → FTS `MATCH` (quotes doubled) / `LIKE` (wildcards escaped); never writes |
-| `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`, `stream`) against the server from must's config | credentials via md5 token (see below); `--max-time 5–10` |
+| `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`, `stream`) against the server from must's config | credentials via md5 token (see below); `--max-time 5–10` + `--max-filesize` (2 MiB JSON endpoints, 1 MiB cover art) so a faulty server can't flood the pipe |
 | `/usr/bin/sh -c` | glue for multi-step flows (listing temp dirs/playlists, art probing, dispatch scripts) | every interpolated value single-quote wrapped (`shq`) or SQL-quote doubled |
 | must binary (config `mustBin`, else `command -v must`) | `play / playshuffle / enqueue / enqueue-next / random / rescan / status` | resolvers built from the selected row; see `Dispatch.js` |
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
@@ -26,7 +26,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | `ffprobe` (bare name, only if the user installed it) | tag reader rung inside the script above: `-v quiet -print_format json -show_format <path>`, per-file 30 s timeout | **not** absolute-pathed — resolved via `PATH`, so the shell-env residual below applies fully; JSON output parsed, never executed |
 | `/usr/bin/{mkdir,rm,ls,find,sed,sort,wc}` | cache/state dir setup, temp-dir listing, art probing | paths single-quote wrapped |
 | `scripts/warm-art-cache.sh` (manual, user-run, never auto-executed) | pre-downloads Navidrome covers into `~/.cache/amla/art` | reads must `[subsonic]` creds, token auth like the plugin |
-| `<plugindir>/rmpc_art.py` (runs under rmpc, never spawned by amla) | `album_art.custom_loader` hook: Subsonic stream covers for rmpc | song id parsed from `$FILE` stream URL; creds mirror pickSubsonic (must → cliamp → amla-owned); always exits 0, `fallback` on any failure |
+| `<plugindir>/rmpc_art.py` (runs under rmpc, never spawned by amla) | `album_art.custom_loader` hook: Subsonic stream covers for rmpc | song id parsed from `$FILE` stream URL; creds mirror pickSubsonic (must → cliamp → amla-owned); same-origin redirect policy (≤3 hops, blocks cross-origin token leaks), Content-Type checked before reading, Content-Length pre-check + streaming MAX+1 caps (256 KiB JSON, 10 MiB images), header-parsed dimension cap 4096px; always exits 0, `fallback` on any failure |
 
 No `sudo`, `pkexec`, `setcap`, package installs, or privilege escalation of
 any kind. No compiler, downloader, or runtime dependency beyond the table
