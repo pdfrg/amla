@@ -22,11 +22,11 @@ function shq(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
-// First must release shipping subsonic:playlist:<id> (commit a297ac9).
-var MUST_PLAYLIST_MIN = [0, 2, 4]
+// First must release shipping subsonic:playlist:<id>: v0.3.0 (commit a297ac9).
+var MUST_PLAYLIST_MIN = [0, 3, 0]
 
 // Capability gate for the native server-playlist resolver. versionText
-// is `must --version` output ("must v0.2.4 (...)" / "must dev (...)").
+// is `must --version` output ("must v0.3.0 (...)" / "must dev (...)").
 // Unknown ("" / unparseable / no binary) => false: callers fall back to
 // the staged-m3u handoff, which works on every must with the file tier.
 function mustHasPlaylistResolver(versionText) {

@@ -128,11 +128,11 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2154"
+    readonly property string buildId: "0.5.2155"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
-    // native server-playlist resolver (must >= v0.2.4, or dev builds).
+    // native server-playlist resolver (must >= v0.3.0, or dev builds).
     property string mustVersion: ""
     // MPD liveness (§18): -1 unknown (probe unanswered), 0 down, 1 up.
     property int mpdAlive: -1
@@ -911,7 +911,7 @@ Item {
             }
             return ;
         }
-        // Native path (must >= v0.2.4, or dev) falls through to
+        // Native path (must >= v0.3.0, or dev) falls through to
         // Dispatch.build, whose mustResolver emits
         // subsonic:playlist:'<id>'. Older/unknown must takes the
         // compatibility path: fetch the entries over REST and hand
@@ -919,7 +919,7 @@ Item {
         if (target === "must" && row && row.kind === "subsonic-playlist" && row.id && !Dispatch.mustHasPlaylistResolver(root.mustVersion)) {
             if (!root.mustNudged && Dispatch.mustVersionIsOld(root.mustVersion)) {
                 root.mustNudged = true;
-                root.notify("amla: server playlists via compatibility mode — upgrade must to v0.2.4+ for native support");
+                root.notify("amla: server playlists via compatibility mode — upgrade must to v0.3.0+ for native support");
             }
             var compatAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
             pendingSubAction = action;

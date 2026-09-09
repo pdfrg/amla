@@ -20,12 +20,14 @@ Favorites learn from your play history and surface as you type. Dispatches to
 
 ![amla+cliamp](amla-cliamp.jpg)
   
-- **[must - music TUI](https://github.com/pdfrg/must)** (≥ 0.2.3) is worth a look:
+- **[must - music TUI](https://github.com/pdfrg/must)** (≥ 0.3.0) is worth a look:
   library search and browser, album art, artist art, and artist galleries
   (in the terminal), artist bios, and vim-style keybindings. It needs a Go toolchain
   to build, but amla's must support runs deepest — native catalog resolvers,
   playshuffle, scoped random, rescan — because the two were developed
-  together. Cycle to it with `Ctrl+T` inside the popup. amla finds the
+  together. Cycle to it with `Ctrl+T` inside the popup. Server-side
+  playlists play natively on must 0.3.0+; older releases fall back to a
+  staged-m3u handoff automatically. amla finds the
   binary via `mustBin` in its own config, else `command -v must` — so if
   you installed with `go install` and `~/go/bin` isn't on your `PATH`,
   either add it or set `"mustBin": "/home/you/go/bin/must"` (full path,
