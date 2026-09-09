@@ -166,6 +166,23 @@ function pathsUnderDirSql(dir, table) {
     return "SELECT path FROM " + t + " WHERE path LIKE '" + d + "/%' ESCAPE '\\' AND (" + conds.join(" OR ") + ") ORDER BY path"
 }
 
+// Directory expansion as an m3u body for cliamp playshuffle dir loads:
+// same line shape as pathsForKindM3uSql (empty EXTINF title → tag
+// probe, full metadata + album grouping) but scoped to one dir and
+// always ORDER BY RANDOM() — url.load on a directory would otherwise
+// pin the scan head at position 0 under shuffle. Extension filter
+// and LIKE escaping mirror pathsUnderDirSql.
+function dirM3uSql(dir, table) {
+    var t = table || "tracks"
+    var d = String(dir || "").replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")
+    var ext = ["mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wav", "aiff", "ape", "wv"]
+    var conds = []
+    for (var i = 0; i < ext.length; i++)
+        conds.push("path LIKE '%." + ext[i] + "' COLLATE NOCASE")
+    var inf = "'#EXTINF:' || CAST(COALESCE(duration, 0) AS INTEGER) || ',' || char(10) || path"
+    return "SELECT " + inf + " FROM " + t + " WHERE path LIKE '" + d + "/%' ESCAPE '\\' AND (" + conds.join(" OR ") + ") ORDER BY RANDOM()"
+}
+
 // Facets: full genre + year lists, fetched once per popup open.
 function facetSql() {
   return "SELECT genre AS g, COUNT(DISTINCT album) AS n FROM tracks WHERE genre != '' GROUP BY genre ORDER BY n DESC;" +

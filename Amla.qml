@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2152"
+    readonly property string buildId: "0.5.2154"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -797,6 +797,25 @@ Item {
                 return ;
             }
             if (row.kind === "temp" || row.kind === "library") {
+                if (action === "playshuffle") {
+                    // Pre-shuffled resolve like the facet flows: url.load
+                    // on a directory pins the scan head at position 0
+                    // under shuffle. Reuses cliampResolveProc (sqlite →
+                    // queue.m3u → url.load the file); its completion
+                    // dispatches pendingSubAction through runCliamp.
+                    pendingSubAction = action;
+                    pendingSubRow = row;
+                    cliampResolveProc.environment = {
+                        "PATH": "/usr/bin:/bin",
+                        "AMLA_DB": root.localDbPath(),
+                        "AMLA_FILESDB": root.filesDb,
+                        "AMLA_SQL": Catalog.dirM3uSql(row.path, root.localDbTable()),
+                        "AMLA_SQL_FILES": Catalog.dirM3uSql(row.path, "files")
+                    };
+                    cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
+                    cliampResolveProc.running = true;
+                    return ;
+                }
                 runCliamp(row, action, {
                     "op": "url.load",
                     "params": {
@@ -2452,10 +2471,27 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var n = parseInt(String(text).trim() || "0");
-                if (n <= 0)
-                    return ;
-
                 var action = root.pendingSubAction || "play";
+                var prow = root.pendingSubRow;
+                if (n <= 0) {
+                    // Unindexed dir (temp rows live outside must's
+                    // music_dirs, and the files index may not cover
+                    // them either): fall back to a direct directory
+                    // load instead of silently no-opping. Daemon
+                    // shuffle still shuffles playback; only the head
+                    // is pinned (pre-fix behavior). runCliamp applies
+                    // the playshuffle rewrite (clear-first + shuffle).
+                    if (prow && (prow.kind === "temp" || prow.kind === "library") && prow.path)
+                        root.runCliamp(prow, action, {
+                            "op": "url.load",
+                            "params": {
+                                "path": prow.path
+                            },
+                            "launchTarget": prow.path
+                        });
+
+                    return ;
+                }
                 var m3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                 root.runCliamp(root.pendingSubRow, action, {
                     "op": "url.load",
