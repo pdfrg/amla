@@ -34,11 +34,19 @@ Favorites learn from your play history and surface as you type. Dispatches to
   play, enqueue, play-next, playshuffle, random albums, playlists — local
   files queue by path, Subsonic items as tagged stream URLs with preloaded
   Artist/Album/Title/Track/Date (stream durations can't be set through the
-  MPD protocol — a daemon limitation, not an amla gap; artwork in
-  terminal clients is opt-in via the shipped `rmpc_art.py` custom-loader
-  hook, inert unless your rmpc enables it — see its header). Playshuffle keeps the queue in
-  album/track order and switches the daemon to random mode, like the other
-  targets. No TUI to launch: an unreachable daemon notifies instead.
+  MPD protocol — a daemon limitation, not an amla gap). Playshuffle keeps
+  the queue in album/track order and switches the daemon to random mode,
+  like the other targets. No TUI to launch: an unreachable daemon notifies
+  instead. For a TUI, the recommended client is
+  [rmpc](https://github.com/mierak/rmpc): amla ships an `rmpc_art.py`
+  `album_art.custom_loader` hook so Subsonic streams render cover art
+  in-pane (song id is parsed from the stream URL → Navidrome `getCoverArt`;
+  local-file art is untouched). Enable it with
+  `custom_loader: ["<plugin-dir>/rmpc_art.py"]` under `album_art` in your
+  rmpc config — the key is inert on stable v0.11, so one config works on
+  both. Tested and working on dev builds past v0.11 (custom-loader support
+  landed upstream 2026-02-06); stable v0.11 ignores the key and streams
+  simply show no art.
 
 A Subsonic/Navidrome server is optional — configure it in must
 (`[subsonic]`), cliamp (`[navidrome]`), or amla's own config
