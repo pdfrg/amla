@@ -17,6 +17,9 @@ Favorites learn from your play history and surface as you type. Dispatches to
   default (requires cliamp v2+ for the `url.load` / `track.*` / `queue.*` IPC
   ops; v1 CLIs differ and are not supported). Play, enqueue, and play-next
   all work; multi-item lists go through generated m3us.
+
+![amla+cliamp](amla-cliamp.jpg)
+  
 - **[must - music TUI](https://github.com/pdfrg/must)** (≥ 0.2.3) is worth a look:
   library search and browser, album art, artist art, and artist galleries
   (in the terminal), artist bios, and vim-style keybindings. It needs a Go toolchain
@@ -47,6 +50,8 @@ Favorites learn from your play history and surface as you type. Dispatches to
   both. Tested and working on dev builds past v0.11 (custom-loader support
   landed upstream 2026-02-06); stable v0.11 ignores the key and streams
   simply show no art.
+
+![amla+mpd+rmpc-dev](amla-mpd-rmpc-dev.jpg)
 
 A Subsonic/Navidrome server is optional — configure it in must
 (`[subsonic]`), cliamp (`[navidrome]`), or amla's own config
