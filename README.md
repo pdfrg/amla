@@ -22,7 +22,11 @@ Favorites learn from your play history and surface as you type. Dispatches to
   (in the terminal), artist bios, and vim-style keybindings. It needs a Go toolchain
   to build, but amla's must support runs deepest — native catalog resolvers,
   playshuffle, scoped random, rescan — because the two were developed
-  together. Cycle to it with `Ctrl+T` inside the popup.
+  together. Cycle to it with `Ctrl+T` inside the popup. amla finds the
+  binary via `mustBin` in its own config, else `command -v must` — so if
+  you installed with `go install` and `~/go/bin` isn't on your `PATH`,
+  either add it or set `"mustBin": "/home/you/go/bin/must"` (full path,
+  no `~`) in `~/.config/amla/config.json`.
 
 ![amla+must](amla-must.jpg)
 
@@ -40,7 +44,17 @@ A Subsonic/Navidrome server is optional — configure it in must
 (`[subsonic]`), cliamp (`[navidrome]`), or amla's own config
 (`subsonicUrl`/`subsonicUser`/`subsonicPass` as last resort) and amla
 searches it too; without any of those amla is local-only and never touches
-the network.
+the network. MPD-only with no must or cliamp config? amla's own keys are
+the whole setup (`~/.config/amla/config.json`, then `omarchy restart shell`):
+
+```json
+{
+  "targetPlayer": "mpd",
+  "subsonicUrl": "http://192.168.1.XYZ:4533",
+  "subsonicUser": "your_user",
+  "subsonicPass": "your_password"
+}
+```
 
 ## Local library: three tiers, zero config
 
