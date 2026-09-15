@@ -43,10 +43,6 @@ function authParams(username, password, salt) {
         "&f=json"
 }
 
-function apiUrl(baseUrl, path, query) {
-    return baseUrl.replace(/\/+$/, "") + "/rest/" + path + "?" + query
-}
-
 // Uniform song subtext: "song · Artist - Album" (parts omitted when
 // empty, optional trailing source tag for remote rows).
 function songSubtitle(artist, album, suffix) {
@@ -285,17 +281,26 @@ function albumIdMatch(sub, normAlbum) {
     return null
 }
 
-// Cover download for amla's own cache (POST like every other request);
-// playback/art URLs handed to *other* processes still carry credentials
-// (see streamUrl) -- that handoff is a separate, known limitation.
+// Cover download for amla's own cache (POST like every other request).
 function coverArtRequest(baseUrl, auth, coverArtId, size) {
     return postRequest(baseUrl, "getCoverArt", auth +
         "&id=" + encodeURIComponent(String(coverArtId || "")) +
         "&size=" + (size || 96))
 }
 
-function streamUrl(baseUrl, auth, songId) {
-    return apiUrl(baseUrl, "stream", auth + "&id=" + encodeURIComponent(String(songId || "")))
+// NOTE: there is deliberately no stream-URL builder in this module. A
+// Subsonic stream URL carries the account token, and every consumer of one
+// is a media player that persists it (MPD's queue/state file, cliamp's
+// queue/resume.json) -- so amla hands players a credential-free loopback
+// URL from subsonic_broker.py instead (see Amla.brokerUrl).
+
+// Server identity epoch: the major.minor of the Subsonic server version.
+// Navidrome id encodings are version-scoped (0.64 re-encoded every media
+// file id), so cached ids are only trustworthy within one epoch. "" when
+// the server does not report a version.
+function serverEpoch(sub) {
+    var m = String((sub && sub.serverVersion) || "").match(/^(\d+)\.(\d+)/)
+    return m ? (m[1] + "." + m[2]) : ""
 }
 
 function getSubsonic(res) {

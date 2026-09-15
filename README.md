@@ -55,6 +55,14 @@ Favorites learn from your play history and surface as you type. Dispatches to
 
 ![amla+mpd+rmpc-dev](amla-mpd-rmpc-dev.jpg)
 
+Subsonic streams are handed to players as `http://127.0.0.1:<port>/…` URLs
+from a loopback broker that owns the credentials, rather than as direct
+server URLs — Subsonic auth travels in the URL, and players persist what
+they are given (MPD's queue/state file and log, cliamp's queue and
+`resume.json`). The broker is started automatically once credentials exist,
+lives for the session, and is restarted if it dies; nothing else needs
+configuring. Details in [`SECURITY.md`](SECURITY.md).
+
 A Subsonic/Navidrome server is optional — configure it in must
 (`[subsonic]`), cliamp (`[navidrome]`), or amla's own config
 (`subsonicUrl`/`subsonicUser`/`subsonicPass` as last resort) and amla
@@ -220,6 +228,8 @@ server_badge = 'N'
 - Subsonic cover cache: `~/.cache/amla/art/` (`Ctrl+R` flushes)
 - Plugin config: `~/.config/amla/config.json` (`targetPlayer`, `mustBin` override)
   — hand-edits need `omarchy restart shell` (see above)
+- Stream broker state: `~/.cache/amla/broker.json` (pid/port/capability,
+  0600; no credentials)
 - amla's file index: `~/.cache/amla/files.db` (songs, WAL + FTS5)
 - must's library DB is read-only: `~/.cache/must/library.db` (FTS5)
 - `$XDG_RUNTIME_DIR/amla/` holds per-dispatch staging files (`queue.m3u`
@@ -242,8 +252,11 @@ omarchy plugin remove io.github.pdfrg.amla
 rm -rf ~/.config/amla ~/.local/state/amla ~/.cache/amla   # optional: own state
 ```
 
-then delete the `SUPER + M` line from `~/.config/hypr/bindings.lua`. No
-services, timers, or daemons are installed, so nothing else lingers.
+then delete the `SUPER + M` line from `~/.config/hypr/bindings.lua`. amla
+installs no services or timers. It does run one small user-scope helper
+while you are logged in: a **loopback broker** that holds your Subsonic
+credentials so players never receive them (see below). It exits with your
+session and `pkill -f subsonic_broker.py` stops it early.
 
 ## Credits
 

@@ -4,9 +4,11 @@
 MPD's `albumart`/`readpicture` only work for files inside music_directory,
 so stream URLs (http...) can never have in-pane art in rmpc -- unless a
 custom loader supplies the bytes. rmpc runs this script with the song URI
-in $FILE; amla dispatches Subsonic streams as
-  http://host:4533/rest/stream?...&id=<songId>
-so the song id is parsed straight out of the URL and its cover fetched
+in $FILE; amla dispatches Subsonic streams through its loopback broker as
+  http://127.0.0.1:<port>/<prefix>/s/<songId>
+(direct `http://host:4533/rest/stream?...&id=<songId>` URLs from earlier
+versions are still understood) so the song id is parsed out of the URI and
+its cover fetched
 via Navidrome `getCoverArt` (which accepts a song id, not just the
 coverArt id). Anything else -- local files, missing id, no creds, any
 error -- prints `action: fallback` (rmpc's default MPD behavior, so
@@ -26,9 +28,13 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 import urllib.parse
 import urllib.request
+
+# amla broker route: 127.0.0.1/<32-hex capability>/s/<songId>
+BROKER_PATH_RE = re.compile(r"^/[0-9a-fA-F]{32}/s/([A-Za-z0-9._-]{1,64})$")
 
 COVER_SIZE = 500
 HTTP_TIMEOUT = 15
@@ -132,14 +138,19 @@ def pick_subsonic(home):
 
 
 def song_id_from_uri(uri):
+    """Song id from an amla broker URL (path form) or a direct Subsonic
+    stream URL (query form). Local paths and anything else yield ""."""
     if "://" not in uri:
         return ""
     try:
-        ids = urllib.parse.parse_qs(urllib.parse.urlparse(uri).query
-                                    ).get("id", [])
+        parsed = urllib.parse.urlparse(uri)
+        ids = urllib.parse.parse_qs(parsed.query).get("id", [])
+        if ids:
+            return ids[0]
+        m = BROKER_PATH_RE.match(parsed.path)
+        return m.group(1) if m else ""
     except ValueError:
         return ""
-    return ids[0] if ids else ""
 
 
 def auth_body(user, password):

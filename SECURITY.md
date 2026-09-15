@@ -15,6 +15,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 |---|---|---|
 | `/usr/bin/sqlite3 -readonly` | read-only queries over must's `library.db` (FTS5 + aggregates) | user query → FTS `MATCH` (quotes doubled) / `LIKE` (wildcards escaped); never writes |
 | `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`) against the server from must's config | **POST**: auth + params travel in the form body, fed from a private env var into curl's stdin — never in argv and never in the URL; `--max-time 5–10` + `--max-filesize` (2 MiB JSON endpoints, 1 MiB cover art) so a faulty server can't flood the pipe |
+| `/usr/bin/python3 <plugindir>/subsonic_broker.py` | **the stream broker**: holds the Subsonic credentials so players never see them. Serves `GET\|HEAD /<32-hex capability>/s/<songId>` on 127.0.0.1 and proxies to `/rest/stream` with auth in a POST body | route/id validation (`[A-Za-z0-9._-]{1,64}`, no query strings), same-origin-only redirects (≤3 hops), 1 GiB response cap, 20 s upstream timeout, Range forwarded (206), Subsonic error payloads surfaced as 502 instead of being streamed as audio, an exclusive lock so only one instance runs, and no request logging |
 | `/usr/bin/sh -c` | glue for multi-step flows (listing temp dirs/playlists, art probing, dispatch scripts) | every interpolated value single-quote wrapped (`shq`) or SQL-quote doubled |
 | must binary (config `mustBin`, else `command -v must`) | `play / playshuffle / enqueue / enqueue-next / random / rescan / status` | resolvers built from the selected row; see `Dispatch.js` |
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
@@ -40,10 +41,17 @@ them read-only and never installs anything.
   `[navidrome]` → amla's own `subsonicUrl/User/Pass` (first URL wins;
   must additionally requires `enabled`), and only for Subsonic rows,
   facets, and artwork.
-- Auth is Subsonic token auth: `md5(password + per-request salt)` sent as the
-  `t=` query param. The password itself never leaves the machine in any form
-  except this standard Subsonic hash.
-- No telemetry, no other hosts, no listening sockets.
+- Auth is Subsonic token auth: `md5(password + client-chosen salt)`. That
+  value is password-equivalent (the server just recomputes it, so a captured
+  `u`/`t`/`s` triple is replayable indefinitely), which is why amla keeps it
+  out of argv, out of request URLs, and out of every URL handed to a player.
+  The password itself never leaves the machine in any form except this
+  standard Subsonic hash.
+- The stream broker (below) binds **127.0.0.1 on an ephemeral port** -- the
+  only listening socket amla owns. It accepts three things: its own
+  unguessable 32-hex path prefix, one `s/<songId>` segment, and GET/HEAD.
+  Everything else is refused.
+- No telemetry, no other hosts.
 
 ## Files read
 
@@ -66,6 +74,9 @@ them read-only and never installs anything.
 - `~/.local/state/amla/history.json` — play counts / recency for favorites.
 - `~/.cache/amla/art/` — Subsonic cover thumbnails (`size=96`, `Ctrl+R` flushes).
 - `~/.cache/amla/files.db*` — amla-owned file index (songs + FTS5, WAL mode).
+- `~/.cache/amla/broker.json` — the stream broker's `{pid, port, prefix}`
+  (0600), plus `broker.json.lock` (0600, exclusive-lock file). No credentials:
+  the helper reads those from the spawn environment only.
 - `$XDG_RUNTIME_DIR/amla/` — owner-only (0700) staging dir, `umask 077` on
   shell writes. It holds dispatch handoff files that can contain Subsonic
   stream URLs (password-equivalent while they live), on tmpfs:
@@ -78,7 +89,8 @@ them read-only and never installs anything.
 **Removal:** `omarchy plugin remove io.github.pdfrg.amla` (or delete
 `~/.config/omarchy/plugins/io.github.pdfrg.amla`), then optionally
 `rm -rf ~/.config/amla ~/.local/state/amla ~/.cache/amla` and drop the
-keybinding line. No services, timers, or daemons are installed.
+keybinding line. One user-scope helper runs while you are logged in (the
+stream broker below); it exits with the session and installs nothing.
 
 ## Always-on behavior (`keepLoaded: true`)
 
@@ -87,6 +99,14 @@ keybinding line. No services, timers, or daemons are installed.
   art so the first open is fast. No periodic network polling afterwards.
 - With no must DB present, the first popup open (or pre-warm) also triggers
   a background `index-library.py` run to build the file index.
+- The **stream broker** is spawned when Subsonic credentials are known (at
+  load, and again on demand) and kept alive for the session by a 60 s
+  liveness probe, because players hold its URLs in queues that outlive a
+  single dispatch. It does no work while idle (blocking accept, zero CPU) and
+  exits with the session. It reuses the port and capability recorded in
+  `~/.cache/amla/broker.json` so URLs already queued by a player keep
+  resolving across a respawn; if that port is taken it falls back to a fresh
+  one and says so.
 
 ## Known residuals (accepted, documented)
 
@@ -96,14 +116,21 @@ keybinding line. No services, timers, or daemons are installed.
   their auth body from an env var into `curl`'s stdin, so the token appears in
   neither argv nor the request URL. Tools are absolute-pathed to blunt `PATH`
   shadowing.
-- Remaining credential surface: **stream URLs handed to other processes** (MPD
-  queue / staged m3u, rmpc's `$FILE`) still carry the Subsonic token, because
-  the Subsonic protocol has no header-based auth and MPD cannot send a request
-  body. Navidrome's token is password-equivalent (replayable for any
-  client-chosen salt), so those URLs are treated as secrets: staged under
-  `$XDG_RUNTIME_DIR/amla` (0700, `umask 077`, tmpfs) and never written outside
-  it. A loopback credential proxy would remove this residual entirely; it is
-  not implemented.
+- Players never receive a Subsonic stream URL. They receive a broker URL
+  (`http://127.0.0.1:<port>/<capability>/s/<id>`) built by `subsonic_broker.py`,
+  so the credential stays in the helper's memory (and in the plugin's private
+  env when the helper is spawned) instead of landing in MPD's queue/state file,
+  cliamp's queue/`resume.json`, or either player's log.
+- Residual: that broker URL **is** a capability. MPD persists it (queue and
+  state file, mode 0644 by MPD's own default) and logs it, so another local
+  user who reads those files could stream that one song through the broker
+  while it runs. Bounded: loopback only, one song id, no account credential,
+  nothing reusable offline, and dead once the helper exits. Clearing the
+  broker's routing would gain nothing (there is no mapping table — the route
+  *is* the song id, and nothing else is accepted).
+- Residual: MPD's own queue and state file may still contain direct Subsonic
+  URLs from before this broker existed. Those are ordinary queued entries to
+  MPD; `mpc clear` removes them.
 - State files are read/written through Quickshell `FileView` (follows
   symlinks; no `O_NOFOLLOW` primitive exists in QML). Contents are treated as
   data: history entries are only ever rendered as plain text or matched

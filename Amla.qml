@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2158"
+    readonly property string buildId: "0.5.2161"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -180,6 +180,24 @@ Item {
     // The URL itself is credential-free, so it may sit in argv. PATH is
     // pinned because Process environments here are stripped.
     readonly property string curlPostPrefix: "/usr/bin/curl -s --max-filesize 2097152 --max-time "
+    // ----- Subsonic stream broker (marketplace security review) -----
+    // Players persist the URLs they are handed (MPD's queue and state file,
+    // cliamp's queue and resume.json) and a Subsonic stream URL carries a
+    // replayable account token, so amla never hands a player a Subsonic URL.
+    // It hands a loopback broker URL with no credentials in it; the helper
+    // (subsonic_broker.py) owns the token, binds 127.0.0.1 with an
+    // unguessable path prefix, and lives for the session because players
+    // keep its URLs in persistent queues. See brokerUrl()/withBroker().
+    readonly property string brokerStateFile: home + "/.cache/amla/broker.json"
+    property int brokerPort: 0
+    property string brokerPrefix: ""
+    property int brokerPid: 0
+    property bool brokerReady: false
+    property bool brokerBusy: false
+    property int brokerAttempts: 0
+    property string brokerStateText: ""
+    property string brokerProbeText: ""
+    property var brokerWaiters: []
 
     // File-index mode (no must DB, or the debugNoMust simulation): local
     // playback resolves against filesDb.files instead of mustDb.tracks.
@@ -205,6 +223,80 @@ Item {
         proc.running = true;
     }
 
+    function brokerScriptPath() {
+        var u = String(Qt.resolvedUrl("subsonic_broker.py"));
+        if (u.indexOf("file://") === 0)
+            u = u.substring(7);
+
+        return u;
+    }
+
+    // "" when the broker is not up: callers must treat that as "cannot hand
+    // this to a player" and never fall back to a credential-bearing URL.
+    function brokerUrl(songId) {
+        if (!root.brokerReady || !songId || String(songId).length === 0)
+            return "";
+
+        return "http://127.0.0.1:" + root.brokerPort + "/" + root.brokerPrefix + "/s/" + String(songId);
+    }
+
+    // Run one dispatch step with a broker available. If none can be
+    // started, the step still runs so provider/native paths are never
+    // blocked; the URL-building callers abort on the empty brokerUrl guard.
+    function withBroker(fn) {
+        if (root.brokerReady) {
+            fn();
+            return ;
+        }
+        root.brokerWaiters.push(fn);
+        root.ensureBroker();
+    }
+
+    function flushBrokerWaiters() {
+        var list = root.brokerWaiters;
+        root.brokerWaiters = [];
+        for (var i = 0; i < list.length; i++) list[i]()
+    }
+
+    function ensureBroker() {
+        if (!root.subEnabled || root.brokerReady || root.brokerBusy)
+            return ;
+
+        root.brokerBusy = true;
+        root.brokerAttempts = 0;
+        brokerReadProc.running = true;
+    }
+
+    function startBroker() {
+        if (!root.subEnabled) {
+            root.brokerBusy = false;
+            root.flushBrokerWaiters();
+            return ;
+        }
+        if (root.brokerAttempts >= 4) {
+            root.brokerBusy = false;
+            root.notify("amla: subsonic broker could not start — subsonic streaming unavailable");
+            root.flushBrokerWaiters();
+            return ;
+        }
+        // Try the persisted port first so URLs already sitting in a player's
+        // queue keep resolving; fall back to an ephemeral one after that.
+        var usePort = root.brokerAttempts === 0 ? root.brokerPort : 0;
+        root.brokerAttempts++;
+        brokerSpawnProc.environment = {
+            "PATH": "/usr/bin:/bin",
+            "AMLA_BROKER_SCRIPT": root.brokerScriptPath(),
+            "AMLA_BROKER_BASE": String(root.sub.url || ""),
+            "AMLA_BROKER_USER": String(root.sub.username || ""),
+            "AMLA_BROKER_PASS": String(root.sub.password || ""),
+            "AMLA_BROKER_STATE": root.brokerStateFile,
+            "AMLA_BROKER_PORT": String(usePort),
+            "AMLA_BROKER_PREFIX": root.brokerPrefix
+        };
+        brokerSpawnProc.command = ["/usr/bin/sh", "-c", "/usr/bin/setsid /usr/bin/python3 \"$AMLA_BROKER_SCRIPT\" >/dev/null 2>&1 &"];
+        brokerSpawnProc.running = true;
+    }
+
     function open(_payloadJson) {
         root.cardTop = -1;
         root.filterText = "";
@@ -214,6 +306,7 @@ Item {
         refreshFacets();
         root.probeMustVersion();
         root.probeMpd();
+        root.ensureBroker();
     }
 
     // IPC freshness probe: omarchy-shell shell call io.github.pdfrg.amla buildInfo ""
@@ -593,6 +686,9 @@ Item {
 
         }
         root.sub = Config.pickSubsonic(root.mustConfig.subsonic, root.cliampNav, owned);
+        // Credentials are known now: bring the stream broker up so the first
+        // dispatch already has credential-free URLs to hand a player.
+        root.ensureBroker();
     }
 
     function probeMpd() {
@@ -608,6 +704,24 @@ Item {
         mpdProbeProc.running = true;
     }
 
+    // True when this dispatch may hand a Subsonic stream URL to a player.
+    // must's resolvers make must fetch the stream itself, so only cliamp and
+    // MPD need the broker. Random-album actions resolve server material
+    // later; the local-scoped ones never do.
+    function dispatchNeedsBroker(row, action, target) {
+        if (target !== "cliamp" && target !== "mpd")
+            return false;
+
+        if (row && String(row.kind || "").indexOf("subsonic-") === 0)
+            return true;
+
+        var a = String(action || "");
+        if (a.indexOf("random-album") !== 0)
+            return false;
+
+        return target === "mpd" ? a !== "random-album-local" : (a === "random-album" || a === "random-album-subsonic");
+    }
+
     function dispatch(row, action) {
         var target = root.targetPlayer;
         var ctx = {
@@ -616,6 +730,18 @@ Item {
             "mpdHost": (root.amlaPluginCfg && root.amlaPluginCfg.mpdHost) || "",
             "mpdPort": (root.amlaPluginCfg && root.amlaPluginCfg.mpdPort) || 0
         };
+        // Bring the broker up before any dispatch that could hand a player a
+        // Subsonic stream URL, and re-enter when it is ready: a short delay
+        // is harmless, a credential-bearing URL in a player's persistent
+        // queue is not. If the broker cannot start at all the waiter is
+        // flushed anyway, and the URL builders abort on their empty-url
+        // guards (never falling back to a token-bearing URL).
+        if (root.subEnabled && !root.brokerReady && root.dispatchNeedsBroker(row, action, target)) {
+            root.withBroker(function() {
+                root.dispatch(row, action);
+            });
+            return ;
+        }
         if (target === "cliamp" && String(action || "").indexOf("random-album") === 0) {
             // Combined mirrors must's server-side `random`: a uniform pick
             // among the available sources per invocation (not a fixed
@@ -671,8 +797,12 @@ Item {
                     dispatchSubsonicCliamp(row, action);
                     return ;
                 }
-                var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                var su = Subsonic.streamUrl(root.sub.url, auth, row.id);
+                // Broker URL: never the token-bearing Subsonic stream URL
+                // (cliamp persists what it is handed).
+                var su = root.brokerUrl(row.id);
+                if (su.length === 0)
+                    return ;
+
                 // Full supplied track (not a bare URL): stream URLs carry
                 // no tags, so url.load shows the host as title and no
                 // duration (cliamp, unlike rmpc, never refreshes stream
@@ -727,9 +857,11 @@ Item {
                     // bare path, "queue.enqueue" takes an index), so
                     // append goes as a single-entry m3u with a real
                     // EXTINF duration (not -1, which flags realtime).
-                    var eauth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
                     var ettl = Subsonic.m3uTitle(row.artist, row.album, row.titleField || row.title, row.track);
-                    var eu = Subsonic.streamUrl(root.sub.url, eauth, row.id);
+                    var eu = root.brokerUrl(row.id);
+                    if (eu.length === 0)
+                        return ;
+
                     var em3u = Quickshell.env("XDG_RUNTIME_DIR") + "/amla/queue.m3u";
                     runCliamp(row, action, {
                         "op": "url.load",
@@ -1108,8 +1240,15 @@ Item {
         var body = "#EXTM3U\n";
         for (var i = 0; i < tracks.length; i++) {
             var t = tracks[i];
-            var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            var u = Subsonic.streamUrl(root.sub.url, auth, t.id);
+            // Broker URLs only: an empty one means the broker is not up, and
+            // callers abort on the empty firstUrl (never a token URL here).
+            var u = root.brokerUrl(t.id);
+            if (u.length === 0)
+                return {
+                "body": "",
+                "firstUrl": ""
+            };
+
             urls.push(u);
             // EXTINF carries Artist - Album - 03 - Title: m3u has no
             // split fields (cliamp takes the whole string as Title),
@@ -1144,7 +1283,6 @@ Item {
     // URL per id, split metadata tags (stream URLs carry none — the
     // preload half of the old gompd addtagid trick, default-on §18).
     function subTracksToMpd(tracks) {
-        var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         var out = [];
         for (var i = 0; i < (tracks || []).length; i++) {
             var t = tracks[i] || {
@@ -1152,8 +1290,14 @@ Item {
             if (!t.id)
                 continue;
 
+            // Broker URL or nothing: MPD keeps queue URIs in its state file,
+            // so this must never be a token-bearing stream URL.
+            var buri = root.brokerUrl(t.id);
+            if (buri.length === 0)
+                continue;
+
             out.push({
-                "uri": Subsonic.streamUrl(root.sub.url, auth, t.id),
+                "uri": buri,
                 "tags": {
                     "artist": t.artist || "",
                     "album": t.album || "",
@@ -1566,6 +1710,25 @@ Item {
         root.subsonicCall(subBackfillProc, req, 5);
     }
 
+    // Cached Subsonic identities are only valid for one server identity
+    // epoch (Navidrome re-encoded every media-file id in 0.64). When the
+    // server reports a different epoch, drop the cached identities once and
+    // let the backfill re-resolve them; without this a favorite would keep
+    // dispatching an id the server no longer knows, forever, because the
+    // backfill skips items that already carry one.
+    function noteSubServer(sub) {
+        var epoch = Subsonic.serverEpoch(sub);
+        if (!History.setServerEpoch(epoch))
+            return ;
+
+        var dropped = History.invalidateSubsonicIds();
+        historyFile.setText(History.serialize());
+        if (dropped > 0) {
+            root.backfillHistoryPaths();
+            root.pumpSubBackfill();
+        }
+    }
+
     function backfillHistoryPaths() {
         if (backfillPathsProc.running)
             return ;
@@ -1956,6 +2119,7 @@ Item {
             waitForEnd: true
             onStreamFinished: {
                 var sub = Subsonic.getSubsonic(String(text || ""));
+                root.noteSubServer(sub);
                 root.subRows = Subsonic.searchRows(sub, root.sub.serverName, root.sub.serverBadge, subSearchProc.query);
                 root.subSearchedQuery = subSearchProc.query;
                 root.rebuildDisplay();
@@ -1973,6 +2137,7 @@ Item {
                 var parts = String(text || "").split("---AMLASPLIT---");
                 var g = Subsonic.getSubsonic(parts[0] || "");
                 var y = Subsonic.getSubsonic(parts[1] || "");
+                root.noteSubServer(g);
                 root.subGenres = Subsonic.genreFacets(g);
                 root.subYears = Subsonic.yearFacets(y);
                 try {
@@ -2349,17 +2514,17 @@ Item {
     }
 
     Process {
+        // Staged m3u path, never ordered[0].path: provider-minted
+        // subsonic paths are authed stream URLs, and a cold launch
+        // would put one in the TUI's argv (world-readable
+        // /proc/<pid>/cmdline). cliamp resolves m3u argv entries
+        // itself, so the path is equivalent.
+
         id: subCliampTracksProc
 
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
-                // Staged m3u path, never ordered[0].path: provider-minted
-                // subsonic paths are authed stream URLs, and a cold launch
-                // would put one in the TUI's argv (world-readable
-                // /proc/<pid>/cmdline). cliamp resolves m3u argv entries
-                // itself, so the path is equivalent.
-
                 var tracks = [];
                 try {
                     var d = JSON.parse(String(text || ""));
@@ -2706,6 +2871,102 @@ Item {
         })
         command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art \"$AMLA_RUNTIME\" && /usr/bin/chmod 700 \"$AMLA_RUNTIME\" && /usr/bin/chmod 700 ~/.config/amla ~/.local/state/amla"]
         running: true
+    }
+
+    // ----- broker plumbing (see subsonic_broker.py and brokerUrl) -----
+    // The state file is read with cat rather than FileView: watchChanges
+    // never refires on external edits, and the broker writes it.
+    Process {
+        id: brokerReadProc
+
+        environment: ({
+            "PATH": "/usr/bin:/bin"
+        })
+        command: ["/bin/cat", root.brokerStateFile]
+        onExited: {
+            root.brokerPort = 0;
+            root.brokerPrefix = "";
+            root.brokerPid = 0;
+            try {
+                var o = JSON.parse(root.brokerStateText || "{}");
+                root.brokerPort = parseInt(o.port, 10) || 0;
+                root.brokerPrefix = String(o.prefix || "");
+                root.brokerPid = parseInt(o.pid, 10) || 0;
+            } catch (e) {
+                root.brokerPort = 0;
+            }
+            if (root.brokerPort > 0 && root.brokerPrefix.length > 0)
+                brokerProbeProc.running = true;
+            else
+                root.startBroker();
+        }
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root.brokerStateText = String(text || "")
+        }
+
+    }
+
+    // Liveness probe: a 404 from a bogus route proves the broker is listening
+    // (a stale pid or a foreign process on that port both fail this).
+    Process {
+        id: brokerProbeProc
+
+        environment: ({
+            "PATH": "/usr/bin:/bin"
+        })
+        command: ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "2", "http://127.0.0.1:" + root.brokerPort + "/amla-probe"]
+        onExited: {
+            if (root.brokerProbeText === "404") {
+                root.brokerReady = true;
+                root.brokerBusy = false;
+                root.flushBrokerWaiters();
+            } else {
+                root.brokerReady = false;
+                root.startBroker();
+            }
+        }
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root.brokerProbeText = String(text || "").trim()
+        }
+
+    }
+
+    Process {
+        id: brokerSpawnProc
+
+        onExited: brokerRetryTimer.restart()
+    }
+
+    // The detached helper needs a moment to bind and publish its state.
+    Timer {
+        id: brokerRetryTimer
+
+        interval: 400
+        onTriggered: {
+            if (!root.brokerReady)
+                brokerReadProc.running = true;
+
+        }
+    }
+
+    // Keeps the helper alive for the session: players hold its URLs in
+    // persistent queues, so a dead broker breaks playback amla is not part of.
+    Timer {
+        id: brokerWatchdog
+
+        interval: 60000
+        repeat: true
+        running: root.subEnabled
+        onTriggered: {
+            if (root.brokerReady)
+                brokerProbeProc.running = true;
+            else
+                root.ensureBroker();
+        }
     }
 
     // amla-owned file index (§13): schema created idempotently at startup;

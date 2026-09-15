@@ -3,17 +3,71 @@
 //   score = playCount*10 + recency bonus (50 <24h, 25 <168h, 10 <720h, else 0)
 
 var items = {}
+// Server identity epoch (major.minor of the Subsonic server version) the
+// cached subsonic ids were resolved against. Navidrome re-encoded every
+// media_file id in 0.64, so cached ids from another epoch point at nothing
+// -- and the backfill skips items that already carry one, meaning a stale
+// id would never heal by itself. See invalidateSubsonicIds().
+var subEpoch = ""
 
 function load(text) {
     items = {}
+    subEpoch = ""
     var obj = {}
     try { obj = JSON.parse(String(text || "{}")) } catch (e) { obj = {} }
     if (obj && obj.items && typeof obj.items === "object")
         items = obj.items
+    if (obj && obj.subEpoch)
+        subEpoch = String(obj.subEpoch)
 }
 
 function serialize() {
-    return JSON.stringify({ "items": items }, null, 2) + "\n"
+    return JSON.stringify({ "items": items, "subEpoch": subEpoch }, null, 2) + "\n"
+}
+
+function serverEpoch() {
+    return subEpoch
+}
+
+// Record the epoch, reporting whether it changed (false for unchanged or
+// unknown, so callers never invalidate on an unreadable server version).
+function setServerEpoch(v) {
+    var e = String(v || "")
+    if (e.length === 0 || e === subEpoch)
+        return false
+    subEpoch = e
+    return true
+}
+
+// Drop every cached Subsonic identity (item id, album id, cover art, and
+// the album-id-checked marker) so the backfill re-resolves them against the
+// current server. Local paths, temp-dir matches and play counts stay.
+function invalidateSubsonicIds() {
+    var dropped = 0
+    var keys = Object.keys(items)
+    for (var i = 0; i < keys.length; i++) {
+        var it = items[keys[i]]
+        var touched = false
+        if (it.subId) {
+            delete it.subId
+            touched = true
+        }
+        if (it.albumId) {
+            delete it.albumId
+            touched = true
+        }
+        if (it.coverArt) {
+            delete it.coverArt
+            touched = true
+        }
+        if (it.albumIdChecked) {
+            delete it.albumIdChecked
+            touched = true
+        }
+        if (touched)
+            dropped++
+    }
+    return dropped
 }
 
 // Key per plan: song `artist|album|title`, album `aartist|album`,
