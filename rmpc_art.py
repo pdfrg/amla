@@ -142,7 +142,8 @@ def song_id_from_uri(uri):
     return ids[0] if ids else ""
 
 
-def auth_query(user, password):
+def auth_body(user, password):
+    """Subsonic auth as a form *body* (never a query string)."""
     salt = "".join(random.choices("abcdef0123456789", k=8))
     token = hashlib.md5((password + salt).encode()).hexdigest()
     return ("u=%s&t=%s&s=%s&v=1.16.1&c=rmpc-art&f=json"
@@ -178,13 +179,25 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
                                         newurl)
 
 
-def bounded_get(url, max_bytes, expect):
-    """GET with same-origin redirect policy, Content-Type gate checked
-    BEFORE reading, Content-Length pre-check, and streaming MAX+1 read
-    (covers lying/omitted lengths). Returns (body, content_type)."""
+def bounded_request(url, max_bytes, expect, form_body=None):
+    """POST (when form_body is given) or GET with same-origin redirect
+    policy, Content-Type gate checked BEFORE reading, Content-Length
+    pre-check, and streaming MAX+1 read (covers lying/omitted lengths).
+    Returns (body, content_type).
+
+    Auth params travel in the form body, never the URL: Subsonic has no
+    header auth, so the token must be sent as a parameter -- but the body
+    keeps it out of request URLs and server/proxy access logs. Navidrome's
+    postFormToQueryParams middleware merges it back into query params."""
     opener = urllib.request.build_opener(
         SameOriginRedirectHandler(_origin(url)))
-    req = opener.open(url, timeout=HTTP_TIMEOUT)
+    if form_body is not None:
+        request = urllib.request.Request(
+            url, data=form_body.encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        req = opener.open(request, timeout=HTTP_TIMEOUT)
+    else:
+        req = opener.open(url, timeout=HTTP_TIMEOUT)
     try:
         ctype = (req.headers.get_content_type() or "").lower()
         if expect == "json":
@@ -275,9 +288,9 @@ def album_id_for_song(base, auth, song_id):
     (dc-*) can go stale server-side and resolve to disc art -- mirror
     of must's loadSubsonicAlbumArtCmd / amla's subArtId preference."""
     try:
-        body, _ = bounded_get(
-            "%s/rest/getSong?%s&id=%s"
-            % (base, auth, urllib.parse.quote(song_id)), JSON_MAX, "json")
+        body, _ = bounded_request(
+            "%s/rest/getSong" % base, JSON_MAX, "json",
+            auth + "&id=" + urllib.parse.quote(song_id))
         sub = json.loads(body.decode("utf-8", "replace"))
         song = (sub.get("subsonic-response") or {}).get("song") or {}
         return str(song.get("albumId") or "")
@@ -286,9 +299,10 @@ def album_id_for_song(base, auth, song_id):
 
 
 def fetch_cover(base, auth, art_id):
-    art_url = ("%s/rest/getCoverArt?%s&id=%s&size=%d"
-               % (base, auth, urllib.parse.quote(art_id), COVER_SIZE))
-    data, _ = bounded_get(art_url, IMAGE_MAX, "image")
+    data, _ = bounded_request(
+        "%s/rest/getCoverArt" % base, IMAGE_MAX, "image",
+        auth + "&id=" + urllib.parse.quote(art_id)
+        + "&size=%d" % COVER_SIZE)
     if not data:
         return None
     dims = image_dimensions(data)
@@ -311,7 +325,7 @@ def main():
             diag("no subsonic creds, fallback")
             fallback()
             return
-        auth = auth_query(user, password)
+        auth = auth_body(user, password)
         ids = []
         album_id = album_id_for_song(base, auth, song_id)
         if album_id and album_id != song_id:

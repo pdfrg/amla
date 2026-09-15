@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2156"
+    readonly property string buildId: "0.5.2157"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -173,6 +173,13 @@ Item {
     // boost; the rest keep the star but fall back to tier order
     // (demote, don't hide). Empty query is untouched (full fav list).
     readonly property int favBoostCap: 5
+    // Subsonic REST via POST (req is {url, body} from Subsonic.js). The
+    // body holds the auth token, so it travels through a private env var
+    // into curl's stdin: never in argv (world-readable
+    // /proc/<pid>/cmdline), never in the URL (server/proxy access logs).
+    // The URL itself is credential-free, so it may sit in argv. PATH is
+    // pinned because Process environments here are stripped.
+    readonly property string curlPostPrefix: "/usr/bin/curl -s --max-filesize 2097152 --max-time "
 
     // File-index mode (no must DB, or the debugNoMust simulation): local
     // playback resolves against filesDb.files instead of mustDb.tracks.
@@ -186,6 +193,16 @@ Item {
 
     function localDbTable() {
         return root.useFilesIndex() ? "files" : "tracks";
+    }
+
+    function subsonicCall(proc, req, timeoutSec) {
+        proc.environment = {
+            "PATH": "/usr/bin:/bin",
+            "AMLA_URL": req.url,
+            "AMLA_BODY": req.body
+        };
+        proc.command = ["/usr/bin/sh", "-c", "printf '%s' \"$AMLA_BODY\" | " + root.curlPostPrefix + String(timeoutSec) + " -X POST --data-binary @- \"$AMLA_URL\""];
+        proc.running = true;
     }
 
     function open(_payloadJson) {
@@ -360,10 +377,12 @@ Item {
                 var cache = Catalog.subArtCacheFile(Catalog.subArtId(row), root.artCacheDir);
                 if (cache.length > 0 && root.subEnabled) {
                     var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+                    var artReq = Subsonic.coverArtRequest(root.sub.url, auth, Catalog.subArtId(row), 96);
                     job = {
                         "dir": Catalog.artDirFor(row) || cache,
                         "out": cache,
-                        "url": Subsonic.coverArtUrl(root.sub.url, auth, Catalog.subArtId(row), 96)
+                        "url": artReq.url,
+                        "body": artReq.body
                     };
                 }
             } else {
@@ -408,8 +427,7 @@ Item {
         if (root.subEnabled) {
             subSearchProc.query = q;
             subSearchProc.auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subSearchProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.search3Url(root.sub.url, subSearchProc.auth, q)];
-            subSearchProc.running = true;
+            root.subsonicCall(subSearchProc, Subsonic.search3Request(root.sub.url, subSearchProc.auth, q), 5);
         }
     }
 
@@ -608,8 +626,7 @@ Item {
                 pendingSubAction = "play";
                 pendingSubRow = null;
                 root.randomFallbackLocal = action === "random-album";
-                subRandomProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
-                subRandomProc.running = true;
+                root.subsonicCall(subRandomProc, Subsonic.randomAlbumRequest(root.sub.url, auth), 5);
                 root.cancel();
                 return ;
             }
@@ -812,7 +829,7 @@ Item {
                         "AMLA_SQL": Catalog.dirM3uSql(row.path, root.localDbTable()),
                         "AMLA_SQL_FILES": Catalog.dirM3uSql(row.path, "files")
                     };
-                    cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
+                    cliampResolveProc.command = ["/usr/bin/sh", "-c", "umask 077; /usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
                     cliampResolveProc.running = true;
                     return ;
                 }
@@ -839,7 +856,7 @@ Item {
                     "AMLA_SQL": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", root.localDbTable()),
                     "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql(row.kind, row, action === "playshuffle", "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "umask 077; /usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
                 return ;
             }
@@ -925,8 +942,7 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             pendingSubTarget = "must";
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, compatAuth, row.id)];
-            subPlaylistProc.running = true;
+            root.subsonicCall(subPlaylistProc, Subsonic.playlistRequest(root.sub.url, compatAuth, row.id), 15);
             return ;
         }
         if (target === "must" && row && row.kind === "playlist" && (row.source === "cliamp" || row.source === "stray")) {
@@ -1038,8 +1054,7 @@ Item {
             root.pendingSubAction = "play";
             root.pendingSubRow = null;
             root.pendingSubTarget = "mpd";
-            subRandomProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", Subsonic.randomAlbumUrl(root.sub.url, auth)];
-            subRandomProc.running = true;
+            root.subsonicCall(subRandomProc, Subsonic.randomAlbumRequest(root.sub.url, auth), 5);
             root.cancel();
             return ;
         }
@@ -1202,28 +1217,22 @@ Item {
     function dispatchSubsonicMpd(row, action) {
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         if (row.kind === "subsonic-album" && row.id && String(row.id).length > 0) {
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, row.id)];
-            subFallbackProc.running = true;
+            root.subsonicCall(subFallbackProc, Subsonic.albumTracksRequest(root.sub.url, auth, row.id), 10);
         } else if (row.kind === "subsonic-artist") {
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100)];
-            subFallbackProc.running = true;
+            root.subsonicCall(subFallbackProc, Subsonic.songsSearchRequest(root.sub.url, auth, row.title, 100), 10);
         } else if (row.kind === "subsonic-genre") {
-            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
-            subGenreProc.running = true;
+            root.subsonicCall(subGenreProc, Subsonic.songsByGenreRequest(root.sub.url, auth, row.title), 10);
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
             var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
-            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
-            subYearListProc.running = true;
+            root.subsonicCall(subYearListProc, Subsonic.albumsByYearRequest(root.sub.url, auth, fromYear, toYear), 10);
         } else if (row.kind === "subsonic-playlist" && row.id) {
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
-            subPlaylistProc.running = true;
+            root.subsonicCall(subPlaylistProc, Subsonic.playlistRequest(root.sub.url, auth, row.id), 15);
         } else {
             // Id-less album row (e.g. from history): REST search over
             // "artist album", mirroring subProviderFallback.
             var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsSearchUrl(root.sub.url, auth, q, 100)];
-            subFallbackProc.running = true;
+            root.subsonicCall(subFallbackProc, Subsonic.songsSearchRequest(root.sub.url, auth, q, 100), 10);
         }
     }
 
@@ -1288,7 +1297,7 @@ Item {
             "AMLA_XDG_CONFIG_HOME": Quickshell.env("XDG_CONFIG_HOME") || "",
             "AMLA_CLIAMP_CONFIG_DIR": Quickshell.env("CLIAMP_CONFIG_DIR") || ""
         };
-        playlistResolveProc.command = ["/usr/bin/sh", "-c", "export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\" | /usr/bin/tee \"$R/pl.m3u\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(([.artist // \"\", .album // \"\", ((.track_number // 0) | tostring | select(test(\"^[1-9][0-9]*$\")) | if length == 1 then \"0\" + . else . end), (.title // .path)] | map(select(. != \"\")) | join(\" - \")))\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
+        playlistResolveProc.command = ["/usr/bin/sh", "-c", "umask 077; export HOME=\"$AMLA_HOME\"; [ -n \"$AMLA_XDG_CONFIG_HOME\" ] && export XDG_CONFIG_HOME=\"$AMLA_XDG_CONFIG_HOME\"; [ -n \"$AMLA_CLIAMP_CONFIG_DIR\" ] && export CLIAMP_CONFIG_DIR=\"$AMLA_CLIAMP_CONFIG_DIR\"; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; if [ \"$AMLA_PL_MODE\" = file ]; then /usr/bin/python3 -c 'import os,sys\nd=sys.argv[1]\ndef f(l):\n s=l.rstrip(chr(10))\n return s if (not s or s[:1]==chr(35) or s[:1]==chr(47) or chr(58)+chr(47)*2 in s) else os.path.normpath(os.path.join(d,s))\nsys.stdout.write(chr(10).join(map(f,sys.stdin))+chr(10))' \"$(/usr/bin/dirname \"$AMLA_PL_PATH\")\" < \"$AMLA_PL_PATH\" | /usr/bin/tee \"$R/pl.m3u\"; else [ -x /usr/bin/jq ] || exit 3; R=\"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\"; /usr/bin/mkdir -p \"$R\"; /usr/bin/cliamp playlist show \"$AMLA_PL_NAME\" --json 2>/dev/null | /usr/bin/jq -r '\"#EXTM3U\", (.[] | if (.path | startswith(\"http\")) then \"#EXTINF:\\(.duration_secs // 0),\\(([.artist // \"\", .album // \"\", ((.track_number // 0) | tostring | select(test(\"^[1-9][0-9]*$\")) | if length == 1 then \"0\" + . else . end), (.title // .path)] | map(select(. != \"\")) | join(\" - \")))\\n\\(.path)\" else .path end)' | /usr/bin/tee \"$R/pl.m3u\"; fi"];
         playlistResolveProc.running = true;
     }
 
@@ -1364,8 +1373,7 @@ Item {
             pendingSubAction = action;
             pendingSubRow = row;
             var shufAuth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, shufAuth, row.id)];
-            subFallbackProc.running = true;
+            root.subsonicCall(subFallbackProc, Subsonic.albumTracksRequest(root.sub.url, shufAuth, row.id), 10);
             return ;
         }
         if (row.kind === "subsonic-album" && action === "play" && row.id && String(row.id).length > 0) {
@@ -1429,21 +1437,18 @@ Item {
         pendingSubAction = action;
         pendingSubRow = row;
         if (row.kind === "subsonic-genre") {
-            subGenreProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.songsByGenreUrl(root.sub.url, auth, row.title)];
-            subGenreProc.running = true;
+            root.subsonicCall(subGenreProc, Subsonic.songsByGenreRequest(root.sub.url, auth, row.title), 10);
         } else if (row.kind === "subsonic-year" || row.kind === "subsonic-decade") {
             var fromYear = row.kind === "subsonic-decade" ? row.decade : (row.year || parseInt(row.title, 10) || 0);
             var toYear = row.kind === "subsonic-decade" ? row.decade + 9 : fromYear;
-            subYearListProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumsByYearUrl(root.sub.url, auth, fromYear, toYear)];
-            subYearListProc.running = true;
+            root.subsonicCall(subYearListProc, Subsonic.albumsByYearRequest(root.sub.url, auth, fromYear, toYear), 10);
         } else if (row.kind === "subsonic-playlist" && row.id) {
             // Server-side playlist: one getPlaylist hop, then the shared
             // file handoff (never a giant env body) — the write completion
             // dispatches to whichever target armed the fetch.
             pendingSubAction = action;
             pendingSubRow = row;
-            subPlaylistProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "15", Subsonic.playlistUrl(root.sub.url, auth, row.id)];
-            subPlaylistProc.running = true;
+            root.subsonicCall(subPlaylistProc, Subsonic.playlistRequest(root.sub.url, auth, row.id), 15);
         } else {
             // Id-less album row (e.g. from history): provider.search over
             // "artist album" resolves its tracks without REST.
@@ -1473,20 +1478,19 @@ Item {
             return ;
 
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-        var url = "";
+        var req = null;
         if (row.kind === "subsonic-album" && row.id) {
-            url = Subsonic.albumTracksUrl(root.sub.url, auth, row.id);
+            req = Subsonic.albumTracksRequest(root.sub.url, auth, row.id);
         } else if (row.kind === "subsonic-artist") {
-            url = Subsonic.songsSearchUrl(root.sub.url, auth, row.title, 100);
+            req = Subsonic.songsSearchRequest(root.sub.url, auth, row.title, 100);
         } else {
             var q = ((row.artist || "") + " " + (row.album || row.title)).trim();
-            url = Subsonic.songsSearchUrl(root.sub.url, auth, q, 100);
+            req = Subsonic.songsSearchRequest(root.sub.url, auth, q, 100);
         }
-        if (!url)
+        if (!req)
             return ;
 
-        subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", url];
-        subFallbackProc.running = true;
+        root.subsonicCall(subFallbackProc, req, 10);
     }
 
     // One indexed lookup per new MPRIS track: backfill the file path the
@@ -1558,9 +1562,8 @@ Item {
         var next = subBackfillProc.queue.shift();
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
         subBackfillProc.current = next;
-        var url = next.stype === "album" ? Subsonic.backfillAlbumUrl(root.sub.url, auth, next.artist, next.album) : Subsonic.backfillSongUrl(root.sub.url, auth, next.artist, next.title);
-        subBackfillProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "5", url];
-        subBackfillProc.running = true;
+        var req = next.stype === "album" ? Subsonic.backfillAlbumRequest(root.sub.url, auth, next.artist, next.album) : Subsonic.backfillSongRequest(root.sub.url, auth, next.artist, next.title);
+        root.subsonicCall(subBackfillProc, req, 5);
     }
 
     function backfillHistoryPaths() {
@@ -1673,7 +1676,21 @@ Item {
         }
         if (root.subEnabled) {
             var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-            subFacetProc.command = ["/usr/bin/sh", "-c", "/usr/bin/curl -s --max-filesize 2097152 --max-time 5 '" + Subsonic.genresUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.byYearUrl(root.sub.url, auth) + "'; echo ---AMLASPLIT---; /usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.playlistsUrl(root.sub.url, auth) + "'"];
+            // Three POSTs in one process: each auth body rides its own
+            // env var into curl's stdin (see subsonicCall).
+            var gr = Subsonic.genresRequest(root.sub.url, auth);
+            var yr = Subsonic.byYearRequest(root.sub.url, auth);
+            var pl = Subsonic.playlistsRequest(root.sub.url, auth);
+            subFacetProc.environment = {
+                "PATH": "/usr/bin:/bin",
+                "AMLA_URL_0": gr.url,
+                "AMLA_BODY_0": gr.body,
+                "AMLA_URL_1": yr.url,
+                "AMLA_BODY_1": yr.body,
+                "AMLA_URL_2": pl.url,
+                "AMLA_BODY_2": pl.body
+            };
+            subFacetProc.command = ["/usr/bin/sh", "-c", "printf '%s' \"$AMLA_BODY_0\" | " + root.curlPostPrefix + "5 -X POST --data-binary @- \"$AMLA_URL_0\"; echo ---AMLASPLIT---; printf '%s' \"$AMLA_BODY_1\" | " + root.curlPostPrefix + "10 -X POST --data-binary @- \"$AMLA_URL_1\"; echo ---AMLASPLIT---; printf '%s' \"$AMLA_BODY_2\" | " + root.curlPostPrefix + "10 -X POST --data-binary @- \"$AMLA_URL_2\""];
             subFacetProc.running = true;
         }
     }
@@ -1750,9 +1767,18 @@ Item {
 
         var ids = root.yearQueue.splice(0, 12);
         var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
+        var env = {
+            "PATH": "/usr/bin:/bin"
+        };
         var parts = [];
-        for (var i = 0; i < ids.length; i++) parts.push("/usr/bin/curl -s --max-filesize 2097152 --max-time 10 '" + Subsonic.albumTracksUrl(root.sub.url, auth, ids[i]) + "'; echo ---AMLAYEAR---")
-        subYearExpandProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p '" + root.runtimeDir + "/amla' && " + parts.join("; ")];
+        for (var i = 0; i < ids.length; i++) {
+            var rq = Subsonic.albumTracksRequest(root.sub.url, auth, ids[i]);
+            env["AMLA_URL_" + i] = rq.url;
+            env["AMLA_BODY_" + i] = rq.body;
+            parts.push("printf '%s' \"$AMLA_BODY_" + i + "\" | " + root.curlPostPrefix + "10 -X POST --data-binary @- \"$AMLA_URL_" + i + "\"; echo ---AMLAYEAR---");
+        }
+        subYearExpandProc.environment = env;
+        subYearExpandProc.command = ["/usr/bin/sh", "-c", "umask 077; /usr/bin/mkdir -p '" + root.runtimeDir + "/amla' && " + parts.join("; ")];
         subYearExpandProc.running = true;
     }
 
@@ -1808,7 +1834,7 @@ Item {
                     "AMLA_SQL": Catalog.pathsForKindM3uSql("album", picked, false, root.localDbTable()),
                     "AMLA_SQL_FILES": Catalog.pathsForKindM3uSql("album", picked, false, "files")
                 };
-                cliampResolveProc.command = ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
+                cliampResolveProc.command = ["/usr/bin/sh", "-c", "umask 077; /usr/bin/mkdir -p \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla\" && /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_DB\" \"$AMLA_SQL\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; if [ ! -s \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\" ] && [ -n \"$AMLA_SQL_FILES\" ] && [ \"$AMLA_DB\" != \"$AMLA_FILESDB\" ]; then /usr/bin/timeout --kill-after=5 15 /usr/bin/sqlite3 -readonly \"$AMLA_FILESDB\" \"$AMLA_SQL_FILES\" > \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\"; fi; /usr/bin/wc -l < \"${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/amla/queue.m3u\""];
                 cliampResolveProc.running = true;
             }
         }
@@ -1971,6 +1997,7 @@ Item {
             if (jobs.length === 0 || artProc.running)
                 return ;
 
+            artProc.environment = Catalog.artProbeEnv(jobs);
             artProc.command = ["/usr/bin/sh", "-c", Catalog.artProbeCommand(jobs)];
             artProc.running = true;
         }
@@ -2523,8 +2550,7 @@ Item {
                 root.pendingSubAction = "play";
                 root.pendingSubRow = fb;
                 var auth = Subsonic.authParams(root.sub.username, root.sub.password, Md5.randomSalt());
-                subFallbackProc.command = ["/usr/bin/curl", "-s", "--max-filesize", "2097152", "--max-time", "10", Subsonic.albumTracksUrl(root.sub.url, auth, fb.id)];
-                subFallbackProc.running = true;
+                root.subsonicCall(subFallbackProc, Subsonic.albumTracksRequest(root.sub.url, auth, fb.id), 10);
                 return ;
             }
             if (exitCode !== 0 || !dispatchProc.hist)
@@ -2660,11 +2686,19 @@ Item {
 
     }
 
-    // amla's XDG dirs (config/state/cache) must exist before first write.
+    // amla's XDG dirs (config/state/cache/runtime) must exist before first
+    // write. The runtime dir holds per-dispatch staging files, so it is
+    // owner-only (0700) and the staging scripts run under umask 077: those
+    // files can carry a Subsonic stream URL, and the token inside it is
+    // password-equivalent while the URL lives.
     Process {
         id: dirSetup
 
-        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art"]
+        environment: ({
+            "PATH": "/usr/bin:/bin",
+            "AMLA_RUNTIME": root.runtimeDir + "/amla"
+        })
+        command: ["/usr/bin/sh", "-c", "/usr/bin/mkdir -p ~/.config/amla ~/.local/state/amla ~/.cache/amla/art \"$AMLA_RUNTIME\" && /usr/bin/chmod 700 \"$AMLA_RUNTIME\" && /usr/bin/chmod 700 ~/.config/amla ~/.local/state/amla"]
         running: true
     }
 

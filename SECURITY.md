@@ -14,7 +14,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | Tool | Purpose | Input shaping |
 |---|---|---|
 | `/usr/bin/sqlite3 -readonly` | read-only queries over must's `library.db` (FTS5 + aggregates) | user query → FTS `MATCH` (quotes doubled) / `LIKE` (wildcards escaped); never writes |
-| `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`, `stream`) against the server from must's config | credentials via md5 token (see below); `--max-time 5–10` + `--max-filesize` (2 MiB JSON endpoints, 1 MiB cover art) so a faulty server can't flood the pipe |
+| `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`) against the server from must's config | **POST**: auth + params travel in the form body, fed from a private env var into curl's stdin — never in argv and never in the URL; `--max-time 5–10` + `--max-filesize` (2 MiB JSON endpoints, 1 MiB cover art) so a faulty server can't flood the pipe |
 | `/usr/bin/sh -c` | glue for multi-step flows (listing temp dirs/playlists, art probing, dispatch scripts) | every interpolated value single-quote wrapped (`shq`) or SQL-quote doubled |
 | must binary (config `mustBin`, else `command -v must`) | `play / playshuffle / enqueue / enqueue-next / random / rescan / status` | resolvers built from the selected row; see `Dispatch.js` |
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
@@ -26,7 +26,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 | `ffprobe` (bare name, only if the user installed it) | tag reader rung inside the script above: `-v quiet -print_format json -show_format <path>`, per-file 30 s timeout | **not** absolute-pathed — resolved via `PATH`, so the shell-env residual below applies fully; JSON output parsed, never executed |
 | `/usr/bin/{mkdir,rm,ls,find,sed,sort,wc}` | cache/state dir setup, temp-dir listing, art probing | paths single-quote wrapped |
 | `scripts/warm-art-cache.sh` (manual, user-run, never auto-executed) | pre-downloads Navidrome covers into `~/.cache/amla/art` | reads must `[subsonic]` creds, token auth like the plugin |
-| `<plugindir>/rmpc_art.py` (runs under rmpc, never spawned by amla) | `album_art.custom_loader` hook: Subsonic stream covers for rmpc | song id parsed from `$FILE` stream URL; creds mirror pickSubsonic (must → cliamp → amla-owned); same-origin redirect policy (≤3 hops, blocks cross-origin token leaks), Content-Type checked before reading, Content-Length pre-check + streaming MAX+1 caps (256 KiB JSON, 10 MiB images), header-parsed dimension cap 4096px; always exits 0, `fallback` on any failure |
+| `<plugindir>/rmpc_art.py` (runs under rmpc, never spawned by amla) | `album_art.custom_loader` hook: Subsonic stream covers for rmpc | song id parsed from `$FILE` stream URL; creds mirror pickSubsonic (must → cliamp → amla-owned), sent as **POST form bodies** (never in URLs); same-origin redirect policy (≤3 hops, blocks cross-origin token leaks), Content-Type checked before reading, Content-Length pre-check + streaming MAX+1 caps (256 KiB JSON, 10 MiB images), header-parsed dimension cap 4096px; always exits 0, `fallback` on any failure |
 
 No `sudo`, `pkexec`, `setcap`, package installs, or privilege escalation of
 any kind. No compiler, downloader, or runtime dependency beyond the table
@@ -66,10 +66,11 @@ them read-only and never installs anything.
 - `~/.local/state/amla/history.json` — play counts / recency for favorites.
 - `~/.cache/amla/art/` — Subsonic cover thumbnails (`size=96`, `Ctrl+R` flushes).
 - `~/.cache/amla/files.db*` — amla-owned file index (songs + FTS5, WAL mode).
-- `$XDG_RUNTIME_DIR/amla/queue.m3u` — staging file for multi-track cliamp dispatch.
-- `$XDG_RUNTIME_DIR/amla/mpd_queue.json` — staging file for MPD dispatch
-  (track URIs + tags + per-dispatch serial).
-- `$XDG_RUNTIME_DIR/amla/subpl.m3u` — staging file for server-playlist dispatch.
+- `$XDG_RUNTIME_DIR/amla/` — owner-only (0700) staging dir, `umask 077` on
+  shell writes. It holds dispatch handoff files that can contain Subsonic
+  stream URLs (password-equivalent while they live), on tmpfs:
+  `queue.m3u` (multi-track cliamp), `mpd_queue.json` (MPD track URIs + tags +
+  per-dispatch serial), `subpl.m3u` (server playlists).
 - Nothing under `/usr`, `/etc`, `~/.config/hypr/`, or `~/.config/omarchy/` is
   written by the plugin. (The optional `SUPER+M` keybinding below is a manual
   one-line user edit, not plugin code.)
@@ -89,10 +90,20 @@ keybinding line. No services, timers, or daemons are installed.
 
 ## Known residuals (accepted, documented)
 
-- Child processes inherit the shell environment (Quickshell `Process`); tools
-  are absolute-pathed to blunt `PATH` shadowing, and JSON/auth payloads travel
-  via env vars rather than argv where practical — but the Subsonic token does
-  appear in `curl` argv (visible to same-user `ps`), as with any CLI REST call.
+- Secrets travel through the process **environment**, never argv:
+  `/proc/<pid>/cmdline` is world-readable, while `/proc/<pid>/environ` is
+  readable only by the same user (and root). amla's own Subsonic calls POST
+  their auth body from an env var into `curl`'s stdin, so the token appears in
+  neither argv nor the request URL. Tools are absolute-pathed to blunt `PATH`
+  shadowing.
+- Remaining credential surface: **stream URLs handed to other processes** (MPD
+  queue / staged m3u, rmpc's `$FILE`) still carry the Subsonic token, because
+  the Subsonic protocol has no header-based auth and MPD cannot send a request
+  body. Navidrome's token is password-equivalent (replayable for any
+  client-chosen salt), so those URLs are treated as secrets: staged under
+  `$XDG_RUNTIME_DIR/amla` (0700, `umask 077`, tmpfs) and never written outside
+  it. A loopback credential proxy would remove this residual entirely; it is
+  not implemented.
 - State files are read/written through Quickshell `FileView` (follows
   symlinks; no `O_NOFOLLOW` primitive exists in QML). Contents are treated as
   data: history entries are only ever rendered as plain text or matched

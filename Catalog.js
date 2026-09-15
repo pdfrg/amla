@@ -739,8 +739,24 @@ function shq(p) {
     return "'" + String(p).replace(/'/g, "'\\''") + "'"
 }
 
+// Environment for the art batch: each subsonic job's auth body (token)
+// rides its own env var, so the generated script text and curl's argv
+// stay credential-free. Env is owner-readable only (/proc/<pid>/environ),
+// unlike argv (/proc/<pid>/cmdline, world-readable).
+function artProbeEnv(jobs) {
+    var env = {
+        "PATH": "/usr/bin:/bin"
+    }
+    for (var i = 0; i < jobs.length; i++) {
+        if (jobs[i].body)
+            env["AMLA_ART_BODY_" + i] = jobs[i].body
+    }
+    return env
+}
+
 // One batched script per result batch: local dir probes (candidate cover
-// files) + subsonic cache downloads. Output lines: A<dir>|<file>.
+// files) + subsonic cache downloads (POST body from env -> curl stdin).
+// Output lines: A<dir>|<file>.
 function artProbeCommand(jobs) {
     var lines = []
     for (var i = 0; i < jobs.length; i++) {
@@ -748,7 +764,7 @@ function artProbeCommand(jobs) {
         var out = job.out
         if (job.url) {
             lines.push("if [ -f " + shq(out) + " ]; then echo A" + shq(job.dir + "|" + out) +
-                "; else /usr/bin/rm -f " + shq(out) + "; /usr/bin/curl -fs --max-filesize 1048576 --max-time 10 -o " + shq(out) + " " + shq(job.url) +
+                "; else /usr/bin/rm -f " + shq(out) + "; printf '%s' \"$AMLA_ART_BODY_" + i + "\" | /usr/bin/curl -fs --max-filesize 1048576 --max-time 10 -X POST --data-binary @- -o " + shq(out) + " " + shq(job.url) +
                 " && echo A" + shq(job.dir + "|" + out) + "; fi")
         } else {
             var candidates = ["folder.jpg", "cover.jpg", "album.jpg", "front.jpg", "front.png", "artist.jpg", "artist.png"]

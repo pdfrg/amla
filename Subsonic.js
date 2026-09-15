@@ -63,38 +63,54 @@ function songSubtitle(artist, album, suffix) {
     return s
 }
 
-function search3Url(baseUrl, auth, query) {
-    return apiUrl(baseUrl, "search3", auth +
+// A Subsonic REST call as {url, body}. The URL carries no credentials and
+// no endpoint params; auth + params travel in the POST form body instead.
+// Subsonic has no header-based auth, so credentials must go as parameters
+// -- but they belong in the request body, not in the URL (server/proxy
+// access logs) and never in process argv (world-readable
+// /proc/<pid>/cmdline). Navidrome's `postFormToQueryParams` middleware
+// merges the form back into query params, so POST is protocol-equivalent
+// to the classic GET form. Callers hand `body` to curl over a private
+// env -> stdin channel (see Amla.subsonicCall).
+function postRequest(baseUrl, path, params) {
+    return {
+        "url": baseUrl.replace(/\/+$/, "") + "/rest/" + path,
+        "body": params
+    }
+}
+
+function search3Request(baseUrl, auth, query) {
+    return postRequest(baseUrl, "search3", auth +
         "&query=" + encodeURIComponent(String(query || "")) +
         "&artistCount=8&albumCount=20&songCount=40")
 }
 
-function genresUrl(baseUrl, auth) {
-    return apiUrl(baseUrl, "getGenres", auth)
+function genresRequest(baseUrl, auth) {
+    return postRequest(baseUrl, "getGenres", auth)
 }
 
-function byYearUrl(baseUrl, auth) {
-    return apiUrl(baseUrl, "getAlbumList2", auth +
+function byYearRequest(baseUrl, auth) {
+    return postRequest(baseUrl, "getAlbumList2", auth +
         "&type=byYear&fromYear=0&toYear=9999&size=500")
 }
 
-function songsByGenreUrl(baseUrl, auth, genre) {
-    return apiUrl(baseUrl, "getSongsByGenre", auth +
+function songsByGenreRequest(baseUrl, auth, genre) {
+    return postRequest(baseUrl, "getSongsByGenre", auth +
         "&genre=" + encodeURIComponent(String(genre || "")) + "&count=500")
 }
 
-function albumsByYearUrl(baseUrl, auth, fromYear, toYear) {
-    return apiUrl(baseUrl, "getAlbumList2", auth +
+function albumsByYearRequest(baseUrl, auth, fromYear, toYear) {
+    return postRequest(baseUrl, "getAlbumList2", auth +
         "&type=byYear&fromYear=" + (fromYear || 0) + "&toYear=" + (toYear || 9999) + "&size=500")
 }
 
-function albumTracksUrl(baseUrl, auth, albumId) {
-    return apiUrl(baseUrl, "getAlbum", auth + "&id=" + encodeURIComponent(String(albumId || "")))
+function albumTracksRequest(baseUrl, auth, albumId) {
+    return postRequest(baseUrl, "getAlbum", auth + "&id=" + encodeURIComponent(String(albumId || "")))
 }
 
 // search3 song-only lookup (provider-op fallback, backfill-style).
-function songsSearchUrl(baseUrl, auth, query, count) {
-    return apiUrl(baseUrl, "search3", auth +
+function songsSearchRequest(baseUrl, auth, query, count) {
+    return postRequest(baseUrl, "search3", auth +
         "&query=" + encodeURIComponent(String(query || "")) +
         "&artistCount=0&albumCount=0&songCount=" + (count || 100))
 }
@@ -149,12 +165,12 @@ function albumSongs(sub) {
     return sub.album.song
 }
 
-function playlistsUrl(baseUrl, auth) {
-    return apiUrl(baseUrl, "getPlaylists", auth)
+function playlistsRequest(baseUrl, auth) {
+    return postRequest(baseUrl, "getPlaylists", auth)
 }
 
-function playlistUrl(baseUrl, auth, playlistId) {
-    return apiUrl(baseUrl, "getPlaylist", auth + "&id=" + encodeURIComponent(String(playlistId || "")))
+function playlistRequest(baseUrl, auth, playlistId) {
+    return postRequest(baseUrl, "getPlaylist", auth + "&id=" + encodeURIComponent(String(playlistId || "")))
 }
 
 // Subsonic JSON collapses single-element arrays to bare objects —
@@ -212,21 +228,21 @@ function playlistSongs(sub) {
     return asArray(sub.playlist.entry)
 }
 
-function randomAlbumUrl(baseUrl, auth) {
-    return apiUrl(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
+function randomAlbumRequest(baseUrl, auth) {
+    return postRequest(baseUrl, "getAlbumList2", auth + "&type=random&size=1")
 }
 
 // History backfill: identify an origin-less favorite on the server so its
 // cover (and subsonic dispatch identity) resolves. One lookup per item;
 // the QML side caps items per run.
-function backfillSongUrl(baseUrl, auth, artist, title) {
-    return apiUrl(baseUrl, "search3", auth +
+function backfillSongRequest(baseUrl, auth, artist, title) {
+    return postRequest(baseUrl, "search3", auth +
         "&query=" + encodeURIComponent(String(artist || "") + " " + String(title || "")) +
         "&artistCount=0&albumCount=0&songCount=5")
 }
 
-function backfillAlbumUrl(baseUrl, auth, artist, album) {
-    return apiUrl(baseUrl, "search3", auth +
+function backfillAlbumRequest(baseUrl, auth, artist, album) {
+    return postRequest(baseUrl, "search3", auth +
         "&query=" + encodeURIComponent(String(artist || "") + " " + String(album || "")) +
         "&artistCount=0&albumCount=3&songCount=0")
 }
@@ -269,8 +285,11 @@ function albumIdMatch(sub, normAlbum) {
     return null
 }
 
-function coverArtUrl(baseUrl, auth, coverArtId, size) {
-    return apiUrl(baseUrl, "getCoverArt", auth +
+// Cover download for amla's own cache (POST like every other request);
+// playback/art URLs handed to *other* processes still carry credentials
+// (see streamUrl) -- that handoff is a separate, known limitation.
+function coverArtRequest(baseUrl, auth, coverArtId, size) {
+    return postRequest(baseUrl, "getCoverArt", auth +
         "&id=" + encodeURIComponent(String(coverArtId || "")) +
         "&size=" + (size || 96))
 }
