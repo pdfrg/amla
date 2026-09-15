@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2157"
+    readonly property string buildId: "0.5.2158"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -2354,6 +2354,12 @@ Item {
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: {
+                // Staged m3u path, never ordered[0].path: provider-minted
+                // subsonic paths are authed stream URLs, and a cold launch
+                // would put one in the TUI's argv (world-readable
+                // /proc/<pid>/cmdline). cliamp resolves m3u argv entries
+                // itself, so the path is equivalent.
+
                 var tracks = [];
                 try {
                     var d = JSON.parse(String(text || ""));
@@ -2389,7 +2395,7 @@ Item {
                     "clearFirst": action === "play",
                     "insertNext": action === "enqueue-next",
                     "m3uBody": body,
-                    "launchTarget": ordered[0].path
+                    "launchTarget": m3u
                 });
             }
         }
