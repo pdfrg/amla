@@ -15,7 +15,7 @@ Metadata-bearing `Text` sinks render as `Text.PlainText`.
 |---|---|---|
 | `/usr/bin/sqlite3 -readonly` | read-only queries over must's `library.db` (FTS5 + aggregates) | user query → FTS `MATCH` (quotes doubled) / `LIKE` (wildcards escaped); never writes |
 | `/usr/bin/curl` | Subsonic REST (`search3`, `getGenres`, `getAlbumList2`, `getCoverArt`) against the server from must's config | **POST**: auth + params travel in the form body, fed from a private env var into curl's stdin — never in argv and never in the URL; `--max-time 5–10` + `--max-filesize` (2 MiB JSON endpoints, 1 MiB cover art) so a faulty server can't flood the pipe |
-| `/usr/bin/python3 <plugindir>/subsonic_broker.py` | **the stream broker**: holds the Subsonic credentials so players never see them. Serves `GET\|HEAD /<32-hex capability>/s/<songId>` on 127.0.0.1 and proxies to `/rest/stream` with auth in a POST body | route/id validation (`[A-Za-z0-9._-]{1,64}`, no query strings), same-origin-only redirects (≤3 hops), 1 GiB response cap, 20 s upstream timeout, Range forwarded (206), Subsonic error payloads surfaced as 502 instead of being streamed as audio, an exclusive lock so only one instance runs, and no request logging |
+| `/usr/bin/python3 <plugindir>/subsonic_broker.py` | **the stream broker**: holds the Subsonic credentials so players never see them. Serves `GET\|HEAD /<32-hex capability>/s/<songId>` (and `/<capability>/health?t=<token>`, this instance's own identity check) on 127.0.0.1, and proxies to `/rest/stream` with auth in a POST body | two route shapes only, with strict prefix compare, id charset/length (`[A-Za-z0-9._-]{1,64}`), no query strings on the stream route, GET/HEAD only; same-origin-only redirects (≤3 hops); 1 GiB response cap and 20 s upstream timeout; Range forwarded (206); Subsonic error payloads surfaced as 502 rather than streamed as audio; **at most 8 concurrent streams** with excess refused immediately (503) and a write deadline for stalled readers; single instance enforced by an exclusive lock whose type/owner are checked and whose mode is repaired to 0600; state written through a random `O_CREAT\|O_EXCL\|O_NOFOLLOW` same-directory temporary, fsynced, renamed via a directory fd, and refused if the destination is not a regular file we own; state *read* (by `--read-state`) bounded, no-follow, regular-file/owner/0600 checked; no request logging |
 | `/usr/bin/sh -c` | glue for multi-step flows (listing temp dirs/playlists, art probing, dispatch scripts) | every interpolated value single-quote wrapped (`shq`) or SQL-quote doubled |
 | must binary (config `mustBin`, else `command -v must`) | `play / playshuffle / enqueue / enqueue-next / random / rescan / status` | resolvers built from the selected row; see `Dispatch.js` |
 | `/usr/bin/cliamp` (+ `remote call … --wait`) | `status` probe, `url.load`, `track.play/queue`, `queue*` ops | JSON params via env (`AMLA_OP`/`AMLA_PARAMS`/`AMLA_M3U`), never shell-quoted |
@@ -74,9 +74,11 @@ them read-only and never installs anything.
 - `~/.local/state/amla/history.json` — play counts / recency for favorites.
 - `~/.cache/amla/art/` — Subsonic cover thumbnails (`size=96`, `Ctrl+R` flushes).
 - `~/.cache/amla/files.db*` — amla-owned file index (songs + FTS5, WAL mode).
-- `~/.cache/amla/broker.json` — the stream broker's `{pid, port, prefix}`
-  (0600), plus `broker.json.lock` (0600, exclusive-lock file). No credentials:
-  the helper reads those from the spawn environment only.
+- `~/.cache/amla/broker.json` — the stream broker's `{pid, port, prefix,
+  token}` (0600; `token` is a per-start identity value for the readiness
+  probe, not a credential), plus `broker.json.lock` (0600, exclusive-lock
+  file). No credentials: the helper reads those from the spawn environment
+  only.
 - `$XDG_RUNTIME_DIR/amla/` — owner-only (0700) staging dir, `umask 077` on
   shell writes. It holds dispatch handoff files that can contain Subsonic
   stream URLs (password-equivalent while they live), on tmpfs:

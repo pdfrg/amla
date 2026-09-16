@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2161"
+    readonly property string buildId: "0.5.2162"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -191,6 +191,7 @@ Item {
     readonly property string brokerStateFile: home + "/.cache/amla/broker.json"
     property int brokerPort: 0
     property string brokerPrefix: ""
+    property string brokerToken: ""
     property int brokerPid: 0
     property bool brokerReady: false
     property bool brokerBusy: false
@@ -221,6 +222,10 @@ Item {
         };
         proc.command = ["/usr/bin/sh", "-c", "printf '%s' \"$AMLA_BODY\" | " + root.curlPostPrefix + String(timeoutSec) + " -X POST --data-binary @- \"$AMLA_URL\""];
         proc.running = true;
+    }
+
+    function brokerHex32(s) {
+        return /^[0-9a-f]{32}$/.test(String(s || ""));
     }
 
     function brokerScriptPath() {
@@ -2882,20 +2887,27 @@ Item {
         environment: ({
             "PATH": "/usr/bin:/bin"
         })
-        command: ["/bin/cat", root.brokerStateFile]
+        command: ["/usr/bin/python3", root.brokerScriptPath(), "--read-state", root.brokerStateFile]
         onExited: {
             root.brokerPort = 0;
             root.brokerPrefix = "";
+            root.brokerToken = "";
             root.brokerPid = 0;
             try {
                 var o = JSON.parse(root.brokerStateText || "{}");
-                root.brokerPort = parseInt(o.port, 10) || 0;
-                root.brokerPrefix = String(o.prefix || "");
-                root.brokerPid = parseInt(o.pid, 10) || 0;
+                var port = parseInt(o.port, 10) || 0;
+                var prefix = String(o.prefix || "");
+                var token = String(o.token || "");
+                if (port > 0 && port < 65536 && root.brokerHex32(prefix) && root.brokerHex32(token)) {
+                    root.brokerPort = port;
+                    root.brokerPrefix = prefix;
+                    root.brokerToken = token;
+                    root.brokerPid = parseInt(o.pid, 10) || 0;
+                }
             } catch (e) {
                 root.brokerPort = 0;
             }
-            if (root.brokerPort > 0 && root.brokerPrefix.length > 0)
+            if (root.brokerPort > 0)
                 brokerProbeProc.running = true;
             else
                 root.startBroker();
@@ -2908,17 +2920,18 @@ Item {
 
     }
 
-    // Liveness probe: a 404 from a bogus route proves the broker is listening
-    // (a stale pid or a foreign process on that port both fail this).
+    // Readiness check: the broker's own capability+token-scoped endpoint must
+    // answer 204. A bare HTTP status is not an identity check, so a process
+    // that later squats on the persisted port cannot pass as the broker.
     Process {
         id: brokerProbeProc
 
         environment: ({
             "PATH": "/usr/bin:/bin"
         })
-        command: ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "2", "http://127.0.0.1:" + root.brokerPort + "/amla-probe"]
+        command: ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "2", "http://127.0.0.1:" + root.brokerPort + "/" + root.brokerPrefix + "/health?t=" + root.brokerToken]
         onExited: {
-            if (root.brokerProbeText === "404") {
+            if (root.brokerProbeText === "204") {
                 root.brokerReady = true;
                 root.brokerBusy = false;
                 root.flushBrokerWaiters();

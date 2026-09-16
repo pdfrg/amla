@@ -26,9 +26,13 @@ forwarded so seeking keeps working, and nothing logged to disk.
 
 Lifecycle: a user-scope helper started on demand by the plugin and living as
 long as the session, because players hold its URLs in persistent queues (MPD
-restores its queue from state_file across restarts). It publishes {port,
-prefix} to a 0600 state file so a respawn reuses the same address and URLs
-already queued by a player keep resolving.
+restores its queue from state_file across restarts). It never exits on an idle
+timer for the same reason; the plugin's liveness probe restarts it instead.
+It publishes {pid, port, prefix, token} to a 0600 state file -- random
+same-directory temporary created O_CREAT|O_EXCL|O_NOFOLLOW, fsynced, renamed
+through a directory fd, destination rejected unless it is a regular file we
+own, lock file checked for type and owner -- so a respawn reuses the same
+address and URLs already queued by a player keep resolving.
 """
 import fcntl
 import hashlib
@@ -38,7 +42,10 @@ import os
 import random
 import re
 import signal
+import socket
+import stat
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,6 +56,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MAX_BYTES = 1024 * 1024 * 1024
 UPSTREAM_TIMEOUT = 20
 CHUNK = 65536
+# Hard ceiling on simultaneous streams (and therefore upstream connections):
+# each one can hold a socket for UPSTREAM_TIMEOUT and push up to MAX_BYTES,
+# so unlimited concurrency is a local resource-exhaustion vector. Excess
+# requests are refused immediately rather than queued.
+MAX_CONCURRENT = 8
+# A client that stops reading must not pin a worker forever.
+CLIENT_WRITE_TIMEOUT = 30
+# Bounded read of our own small state file, used by --read-state.
+STATE_MAX_BYTES = 4096
+SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT)
 AUTH_VERSION = "1.16.1"
 CLIENT_NAME = "amla-broker"
 MAX_REDIRECTS = 3
@@ -61,8 +78,8 @@ STATE = {
     "user": "",
     "password": "",
     "prefix": "",
+    "token": "",
     "port": 0,
-    "inflight": 0,
 }
 
 
@@ -79,33 +96,113 @@ def acquire_lock(state_path):
     """Take an exclusive lock so a slow first start cannot leave two
     brokers running (the plugin may spawn again while the first is still
     binding). The lock is held for the process lifetime and released by the
-    kernel on exit. Returns the fd, or None when another broker holds it."""
+    kernel on exit. Returns the fd, or None when the lock cannot be taken.
+
+    O_NOFOLLOW plus a regular-file/owner check: a same-user component must
+    not be able to aim this at a symlink. An existing lock file we own is
+    repaired to 0600 rather than trusted."""
     if not state_path:
         return None
     lock_path = state_path + ".lock"
     try:
         os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fd
+        fd = os.open(lock_path,
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     except OSError:
         return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            os.close(fd)
+            return None
+        if st.st_mode & 0o777 != 0o600:
+            os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
 
 
-def write_state(path, port, prefix):
-    """Atomically publish {port, prefix} for the plugin (no credentials)."""
+def write_state(path, port, prefix, token):
+    """Atomically publish {pid, port, prefix, token} for the plugin (no
+    credentials).
+
+    Hardened against a pre-placed symlink or file at either path: the
+    temporary is random, same-directory, and created O_CREAT|O_EXCL|
+    O_NOFOLLOW; the payload is fsynced; the destination is rejected unless
+    it is a regular file we own; the rename goes through a directory fd and
+    the directory is fsynced. So this never truncates or follows anything,
+    and never clobbers a file that is not ours."""
     if not path:
         return
-    data = {"pid": os.getpid(), "port": port, "prefix": prefix}
-    tmp = path + ".tmp"
+    payload = json.dumps({"pid": os.getpid(), "port": port,
+                          "prefix": prefix, "token": token})
+    name = os.path.basename(path)
+    tmp_name = ".%s.%s.tmp" % (name, os.urandom(8).hex())
+    dfd = None
+    created = False
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        dfd = os.open(os.path.dirname(path) or ".",
+                      os.O_RDONLY | os.O_DIRECTORY)
+        fd = os.open(tmp_name,
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=dfd)
+        created = True
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.replace(tmp, path)
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+                raise OSError("temporary is not a regular file we own")
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+                raise OSError("state path is not a regular file we own")
+        os.replace(tmp_name, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        created = False
+        os.fsync(dfd)
     except OSError as e:
         log("state write failed: %r" % (e,))
+    finally:
+        if created and dfd is not None:
+            try:
+                os.unlink(tmp_name, dir_fd=dfd)
+            except OSError:
+                pass
+        if dfd is not None:
+            os.close(dfd)
+
+
+def read_state(path):
+    """Print the state document (bounded, no symlink following), for the
+    plugin's --read-state probe. Refuses anything that is not a 0600 regular
+    file owned by us, and never reads more than STATE_MAX_BYTES."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return 1
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            return 1
+        if st.st_mode & 0o777 != 0o600 or st.st_size > STATE_MAX_BYTES:
+            return 1
+        data = os.read(fd, STATE_MAX_BYTES)
+    except OSError:
+        return 1
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    sys.stdout.write(data.decode("utf-8", "replace"))
+    return 0
 
 
 def origin(url):
@@ -167,19 +264,28 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _route(self):
-        """Return the song id for the one valid route shape, else None."""
+        """Return ("stream", songId) or ("health", "") for the two accepted
+        route shapes, else None. Both are scoped to the capability prefix;
+        health additionally requires this instance's token, so a foreign
+        listener on the same port cannot pass itself off as the broker."""
         parts = urllib.parse.urlsplit(self.path)
-        if parts.query or parts.fragment:
+        if parts.fragment:
             return None
         segs = parts.path.split("/")
-        # ["", prefix, "s", id]
-        if len(segs) != 4 or segs[2] != "s" or not segs[3]:
+        if len(segs) < 3 or not segs[1]:
             return None
         if not hmac.compare_digest(segs[1], STATE["prefix"]):
             return None
-        if not ID_RE.match(segs[3]):
+        if len(segs) == 3 and segs[2] == "health":
+            given = urllib.parse.parse_qs(parts.query).get("t", [""])[0]
+            if not hmac.compare_digest(given, STATE["token"]):
+                return None
+            return ("health", "")
+        if len(segs) != 4 or segs[2] != "s" or not segs[3]:
             return None
-        return segs[3]
+        if parts.query or not ID_RE.match(segs[3]):
+            return None
+        return ("stream", segs[3])
 
     def _proxy(self, song_id, head_only):
         body = auth_body() + "&id=" + urllib.parse.quote(song_id)
@@ -243,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True  # player seeked away; not an error
+        except socket.timeout:
+            self.close_connection = True  # stalled reader; free the slot
         except Exception:  # noqa: BLE001
             self.close_connection = True
         finally:
@@ -252,15 +360,28 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _serve(self, head_only):
-        song_id = self._route()
-        if song_id is None:
+        route = self._route()
+        if route is None:
             self._fail(404, "no such route")
             return
-        STATE["inflight"] += 1
+        kind, song_id = route
+        if kind == "health":
+            self.connection.settimeout(CLIENT_WRITE_TIMEOUT)
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        # Refuse excess work outright: every stream can hold an upstream
+        # socket for UPSTREAM_TIMEOUT and push MAX_BYTES, so an unbounded
+        # accept path is a local resource-exhaustion vector.
+        if not SLOTS.acquire(blocking=False):
+            self._fail(503, "broker busy")
+            return
         try:
+            self.connection.settimeout(CLIENT_WRITE_TIMEOUT)
             self._proxy(song_id, head_only)
         finally:
-            STATE["inflight"] -= 1
+            SLOTS.release()
 
     def do_GET(self):
         self._serve(False)
@@ -279,6 +400,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--read-state":
+        return read_state(sys.argv[2])
+
     STATE["base"] = (os.environ.get("AMLA_BROKER_BASE") or "").rstrip("/")
     STATE["user"] = os.environ.get("AMLA_BROKER_USER") or ""
     STATE["password"] = os.environ.get("AMLA_BROKER_PASS") or ""
@@ -292,6 +416,10 @@ def main():
     if not PREFIX_RE.match(prefix):
         prefix = os.urandom(16).hex()
     STATE["prefix"] = prefix
+    # Fresh per-start identity: the plugin's readiness probe must present it,
+    # so another process squatting on the port cannot impersonate the broker
+    # just by answering with an HTTP status.
+    STATE["token"] = os.urandom(16).hex()
 
     lock_fd = acquire_lock(state_path)
     if lock_fd is None:
@@ -307,8 +435,9 @@ def main():
         return 3  # requested port unavailable: caller retries with port 0
 
     httpd.daemon_threads = True
+    httpd.request_queue_size = 16
     STATE["port"] = httpd.server_address[1]
-    write_state(state_path, STATE["port"], STATE["prefix"])
+    write_state(state_path, STATE["port"], STATE["prefix"], STATE["token"])
 
     def stop(_sig, _frm):
         # Direct exit: Server.shutdown() would deadlock when called from a
