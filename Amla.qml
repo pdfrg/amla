@@ -128,7 +128,7 @@ Item {
     property string pluginMustBin: ""
     property var artMap: ({
     })
-    readonly property string buildId: "0.5.2162"
+    readonly property string buildId: "0.5.2164"
     property string pendingSubAction: ""
     property string pendingSubTarget: ""
     // `must --version` output ("" = unknown): capability gating for the
@@ -189,6 +189,9 @@ Item {
     // unguessable path prefix, and lives for the session because players
     // keep its URLs in persistent queues. See brokerUrl()/withBroker().
     readonly property string brokerStateFile: home + "/.cache/amla/broker.json"
+    // Heartbeat the helper watches: while this goes stale (session gone) it
+    // exits rather than keeping credentials resident.
+    readonly property string brokerLeaseFile: home + "/.cache/amla/broker.lease"
     property int brokerPort: 0
     property string brokerPrefix: ""
     property string brokerToken: ""
@@ -238,11 +241,14 @@ Item {
 
     // "" when the broker is not up: callers must treat that as "cannot hand
     // this to a player" and never fall back to a credential-bearing URL.
+    // The id is validated here too (not only inside the broker): it is
+    // server-supplied data on its way into a URL string handed to a player.
     function brokerUrl(songId) {
-        if (!root.brokerReady || !songId || String(songId).length === 0)
+        var id = String(songId || "");
+        if (!root.brokerReady || !/^[A-Za-z0-9._-]{1,64}$/.test(id))
             return "";
 
-        return "http://127.0.0.1:" + root.brokerPort + "/" + root.brokerPrefix + "/s/" + String(songId);
+        return "http://127.0.0.1:" + root.brokerPort + "/" + root.brokerPrefix + "/s/" + id;
     }
 
     // Run one dispatch step with a broker available. If none can be
@@ -261,6 +267,12 @@ Item {
         var list = root.brokerWaiters;
         root.brokerWaiters = [];
         for (var i = 0; i < list.length; i++) list[i]()
+    }
+
+    function touchBrokerLease() {
+        if (!brokerLeaseProc.running)
+            brokerLeaseProc.running = true;
+
     }
 
     function ensureBroker() {
@@ -291,6 +303,7 @@ Item {
         brokerSpawnProc.environment = {
             "PATH": "/usr/bin:/bin",
             "AMLA_BROKER_SCRIPT": root.brokerScriptPath(),
+            "AMLA_BROKER_LEASE": root.brokerLeaseFile,
             "AMLA_BROKER_BASE": String(root.sub.url || ""),
             "AMLA_BROKER_USER": String(root.sub.username || ""),
             "AMLA_BROKER_PASS": String(root.sub.password || ""),
@@ -300,6 +313,9 @@ Item {
         };
         brokerSpawnProc.command = ["/usr/bin/sh", "-c", "/usr/bin/setsid /usr/bin/python3 \"$AMLA_BROKER_SCRIPT\" >/dev/null 2>&1 &"];
         brokerSpawnProc.running = true;
+        // Fresh lease so a new helper does not immediately consider itself
+        // abandoned by the session that just started it.
+        root.touchBrokerLease();
     }
 
     function open(_payloadJson) {
@@ -2923,13 +2939,16 @@ Item {
     // Readiness check: the broker's own capability+token-scoped endpoint must
     // answer 204. A bare HTTP status is not an identity check, so a process
     // that later squats on the persisted port cannot pass as the broker.
+    // The request is made by the broker script itself, which reads the state
+    // in-process: putting the capability in a command line would publish the
+    // broker's access control to every local user via /proc/<pid>/cmdline.
     Process {
         id: brokerProbeProc
 
         environment: ({
             "PATH": "/usr/bin:/bin"
         })
-        command: ["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "2", "http://127.0.0.1:" + root.brokerPort + "/" + root.brokerPrefix + "/health?t=" + root.brokerToken]
+        command: ["/usr/bin/python3", root.brokerScriptPath(), "--health-check", root.brokerStateFile]
         onExited: {
             if (root.brokerProbeText === "204") {
                 root.brokerReady = true;
@@ -2975,11 +2994,26 @@ Item {
         repeat: true
         running: root.subEnabled
         onTriggered: {
-            if (root.brokerReady)
+            if (root.brokerReady) {
+                root.touchBrokerLease();
                 brokerProbeProc.running = true;
-            else
+            } else {
                 root.ensureBroker();
+            }
         }
+    }
+
+    // The lease is what bounds the helper's lifetime to this session; the
+    // helper exits once it goes stale, and the watchdog respawns it (same
+    // port and capability) on demand.
+    Process {
+        id: brokerLeaseProc
+
+        environment: ({
+            "PATH": "/usr/bin:/bin",
+            "AMLA_LEASE": root.brokerLeaseFile
+        })
+        command: ["/usr/bin/sh", "-c", "umask 077; /usr/bin/touch \"$AMLA_LEASE\""]
     }
 
     // amla-owned file index (§13): schema created idempotently at startup;

@@ -46,6 +46,7 @@ import socket
 import stat
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -61,11 +62,24 @@ CHUNK = 65536
 # so unlimited concurrency is a local resource-exhaustion vector. Excess
 # requests are refused immediately rather than queued.
 MAX_CONCURRENT = 8
-# A client that stops reading must not pin a worker forever.
+# A client that stops reading must not pin a worker forever, and a client
+# that never finishes a request must not pin one for long either: the read
+# phase gets a short budget, the write phase a longer one.
 CLIENT_WRITE_TIMEOUT = 30
+REQUEST_READ_TIMEOUT = 5
+# Ceiling on live connections (not just streams): without it, idle or
+# slow-drip clients park one thread each, unbounded.
+MAX_CONNECTIONS = 32
+# The plugin refreshes this lease while its shell session lives; a stale one
+# means the session is gone and the helper should not keep credentials
+# resident on a machine sitting at a login prompt.
+LEASE_TIMEOUT = 300
+LEASE_POLL = 30
 # Bounded read of our own small state file, used by --read-state.
 STATE_MAX_BYTES = 4096
 SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT)
+CONN_LOCK = threading.Lock()
+CONNECTIONS = set()
 AUTH_VERSION = "1.16.1"
 CLIENT_NAME = "amla-broker"
 MAX_REDIRECTS = 3
@@ -211,6 +225,32 @@ def origin(url):
     return (p.scheme.lower(), (p.hostname or "").lower(), p.port or default_port)
 
 
+class Server(ThreadingHTTPServer):
+    """Threading server with a hard ceiling on live connections.
+
+    verify_request refuses (and the socket is immediately closed) once
+    MAX_CONNECTIONS are open, so idle or slow-drip clients cannot park an
+    unbounded number of threads. Rejected requests are never counted, and
+    the same request object is passed to shutdown_request, so the tally
+    cannot drift."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 16
+
+    def verify_request(self, request, client_address):
+        with CONN_LOCK:
+            if len(CONNECTIONS) >= MAX_CONNECTIONS:
+                return False
+            CONNECTIONS.add(request)
+        return True
+
+    def shutdown_request(self, request):
+        with CONN_LOCK:
+            CONNECTIONS.discard(request)
+        super().shutdown_request(request)
+
+
 class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
     """Follow redirects only back to the configured server's own origin.
 
@@ -232,8 +272,11 @@ class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(
                 newurl, code, "redirect refused", headers, fp)
         if code in (301, 302, 303):
-            return urllib.request.Request(
-                newurl, headers={"Range": req.get_header("Range") or ""})
+            headers_out = {}
+            rng = req.get_header("Range")
+            if rng:
+                headers_out["Range"] = rng
+            return urllib.request.Request(newurl, headers=headers_out)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -249,6 +292,11 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "amla-broker"
     sys_version = ""
+
+    def setup(self):
+        super().setup()
+        # Short budget for the request phase; streaming stretches this later.
+        self.connection.settimeout(REQUEST_READ_TIMEOUT)
 
     def log_message(self, *args):
         pass  # never log request lines (they contain the capability prefix)
@@ -399,9 +447,75 @@ class Handler(BaseHTTPRequestHandler):
         self._fail(405, "method not allowed")
 
 
+def health_check(state_path):
+    """Probe our own broker without putting the capability or instance token
+    in a process argument list: read them from the state file in-process and
+    print the HTTP status (or nothing on failure).
+
+    Reasons this exists rather than a curl one-liner: /proc/<pid>/cmdline is
+    world-readable, so a command line carrying the capability would hand the
+    broker's whole access control to any local user, once a minute.
+    """
+    try:
+        fd = os.open(state_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return 1
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid()
+                or st.st_mode & 0o777 != 0o600 or st.st_size > STATE_MAX_BYTES):
+            return 1
+        doc = json.loads(os.read(fd, STATE_MAX_BYTES).decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return 1
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    port = int(doc.get("port") or 0)
+    prefix = str(doc.get("prefix") or "")
+    token = str(doc.get("token") or "")
+    if not (0 < port < 65536 and PREFIX_RE.match(prefix) and PREFIX_RE.match(token)):
+        return 1
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+            sock.sendall(("GET /%s/health?t=%s HTTP/1.0\r\n"
+                          "Host: 127.0.0.1\r\n\r\n" % (prefix, token))
+                         .encode("ascii"))
+            line = sock.makefile("rb").readline(64).decode("ascii", "replace")
+    except OSError:
+        return 1
+    bits = line.split()
+    if len(bits) < 2 or not bits[1].isdigit():
+        return 1
+    sys.stdout.write(bits[1])
+    return 0
+
+
+def lease_watchdog(path):
+    """Exit once the plugin's lease goes stale: the session it belonged to
+    is gone, so credentials should not stay resident. Never while streams are
+    live, since a player may be mid-track."""
+    while True:
+        time.sleep(LEASE_POLL)
+        try:
+            age = time.time() - os.stat(path).st_mtime
+        except OSError:
+            age = LEASE_TIMEOUT + 1
+        if age > LEASE_TIMEOUT:
+            with CONN_LOCK:
+                busy = len(CONNECTIONS) > 0
+            if not busy:
+                log("lease stale, exiting")
+                os._exit(0)
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--read-state":
         return read_state(sys.argv[2])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--health-check":
+        return health_check(sys.argv[2])
 
     STATE["base"] = (os.environ.get("AMLA_BROKER_BASE") or "").rstrip("/")
     STATE["user"] = os.environ.get("AMLA_BROKER_USER") or ""
@@ -427,15 +541,13 @@ def main():
         return 0
 
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", want_port), Handler)
+        httpd = Server(("127.0.0.1", want_port), Handler)
     except OSError:
         if want_port == 0:
             log("bind failed")
             return 1
         return 3  # requested port unavailable: caller retries with port 0
 
-    httpd.daemon_threads = True
-    httpd.request_queue_size = 16
     STATE["port"] = httpd.server_address[1]
     write_state(state_path, STATE["port"], STATE["prefix"], STATE["token"])
 
@@ -448,6 +560,10 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    lease_path = os.environ.get("AMLA_BROKER_LEASE") or ""
+    if lease_path:
+        threading.Thread(target=lease_watchdog, args=(lease_path,),
+                         daemon=True).start()
     try:
         httpd.serve_forever(poll_interval=0.5)
     except Exception as e:  # noqa: BLE001
